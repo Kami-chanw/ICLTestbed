@@ -36,20 +36,14 @@ class ModelBase(abc.ABC):
 
     @property
     def default_prompt_template(self):
-        raise NotImplementedError(
-            "The property `default_prompt_template` should be specified by derived class."
-        )
+        raise NotImplementedError
 
     @property
     def model_name(self):
-        raise NotImplementedError(
-            "The property `model_name` should be specified by derived class."
-        )
+        raise NotImplementedError
 
     def generate(self, **kwargs):
-        raise NotImplementedError(
-            "The method `generate` should be override by derived class."
-        )
+        raise NotImplementedError
 
     def _generate(self, args_to_processor, args_to_generate):
         if not isinstance(args_to_processor, dict) or not isinstance(
