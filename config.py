@@ -1,3 +1,12 @@
+import torch
+
+if torch.cuda.is_available():
+    import os
+
+    os.environ["CUDA_VISIBLE_DEVICE"] = ",".join(
+        [str(i) for i in range(torch.cuda.device_count())]
+    )
+
 # path
 coco_dir = "/data/share/pyz/data/mscoco/mscoco2014"
 vqav2_dir = "/data1/pyz/dataset/vqav2"

@@ -86,13 +86,6 @@ class OKVQADataset(datasets.GeneratorBasedBuilder):
     VERSION = datasets.Version("1.0.0")
 
     BUILDER_CONFIG_CLASS = OKVQAConfig
-    BUILDER_CONFIGS = [
-        OKVQAConfig(
-            name="OKVQA",
-            description="Outside Knowledge Vision Question Answer dataset",
-            version=datasets.Version("1.0.0"),
-        )
-    ]
 
     def _info(self):
         features = datasets.Features(

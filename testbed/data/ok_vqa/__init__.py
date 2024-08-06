@@ -207,8 +207,10 @@ class OKVQAStemmer:
 
 
 def postprocess_generation(predictions: Union[str, List[str]]):
+    is_batched = True
     if isinstance(predictions, str):
         predictions = [predictions]
+        is_batched = False
 
     if not hasattr(postprocess_generation, "stemmer"):
         postprocess_generation.stemmer = OKVQAStemmer()
@@ -218,4 +220,9 @@ def postprocess_generation(predictions: Union[str, List[str]]):
         pred = re.split(", ", pred, 1)[0]
         return postprocess_generation.stemmer.stem(pred)
 
-    return [process(pred) for pred in predictions]
+    result = [process(pred) for pred in predictions]
+
+    if is_batched:
+        return result
+    else:
+        return result[0]

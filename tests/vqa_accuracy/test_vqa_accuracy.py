@@ -4,7 +4,6 @@ import os
 import sys
 
 sys.path.insert(0, "..")
-import config
 
 from testbed.data import vqav2
 from tests.vqa_accuracy.vqa import VQA
@@ -23,7 +22,7 @@ def custom_evaluate(questions_path, annotations_path, result_path, n):
     vqa = VQA(annotations_path, questions_path)
     vqaRes = vqa.loadRes(result_path, questions_path)
 
-    vqa_acc = evaluate.load("../testbed/evaluate/metrics/vqa_accuracy")
+    vqa_acc = evaluate.load("testbed/evaluate/metrics/vqa_accuracy")
 
     predictions, references = [], []
     question_types, answer_types = [], []
@@ -34,12 +33,10 @@ def custom_evaluate(questions_path, annotations_path, result_path, n):
         gt = vqa.qa[quesId]
         res = vqaRes.qa[quesId]
 
-        prediction, reference = vqav2.postprocess_generation(
-            res["answer"], [item["answer"] for item in gt["answers"]]
-        )
+        prediction = vqav2.postprocess_generation(res["answer"])
 
-        predictions.extend(prediction)
-        references.extend(reference)
+        predictions.append(prediction)
+        references.append([item["answer"] for item in gt["answers"]])
         question_types.append(gt["question_type"])
         answer_types.append(gt["answer_type"])
 
@@ -57,14 +54,18 @@ def custom_evaluate(questions_path, annotations_path, result_path, n):
     [
         (
             os.path.join(
+                "tests",
                 "vqa_accuracy",
                 "v2_OpenEnded_mscoco_val2014_questions_subset.json",
             ),
             os.path.join(
+                "tests",
                 "vqa_accuracy",
-                "v2_OpenEnded_mscoco_val2014_annotations_subset.json",
+                "v2_mscoco_val2014_annotations_subset.json",
             ),
-            os.path.join("vqa_accuracy", "v2_OpenEnded_mscoco_val2014_results.json"),
+            os.path.join(
+                "tests", "vqa_accuracy", "v2_OpenEnded_mscoco_val2014_results.json"
+            ),
         ),
         # you can add more test case to validate correctness of `vqa_accuracy`
     ],

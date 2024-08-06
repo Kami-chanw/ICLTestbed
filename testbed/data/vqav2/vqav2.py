@@ -75,13 +75,6 @@ class VQAv2Dataset(datasets.GeneratorBasedBuilder):
     VERSION = datasets.Version("1.0.0")
 
     BUILDER_CONFIG_CLASS = VQAv2Config
-    BUILDER_CONFIGS = [
-        VQAv2Config(
-            name="VQAv2",
-            description="Vision Question Answer dataset version 2",
-            version=datasets.Version("1.0.0"),
-        )
-    ]
 
     def _info(self):
         features = datasets.Features(
@@ -119,7 +112,7 @@ class VQAv2Dataset(datasets.GeneratorBasedBuilder):
                 self.config.data_dir
                 if file_type != "images"
                 else self.config.images_dir
-            )
+            ).resolve()
             / _SUB_FOLDER_OR_FILE_NAME[file_type][split_name],
             _SUB_FOLDER_OR_FILE_NAME,
             self.config.verbose,
