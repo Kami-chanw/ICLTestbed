@@ -1,11 +1,9 @@
 import abc
-from functools import lru_cache
+import inspect
 from typing import Any, Dict, List, Optional, Union
 
 import torch
 from contextlib import suppress
-
-from packaging import version
 
 
 class ModelBase(abc.ABC):
@@ -45,7 +43,7 @@ class ModelBase(abc.ABC):
     def generate(self, **kwargs):
         raise NotImplementedError
 
-    def _generate(self, args_to_processor, args_to_generate):
+    def _generate(self, args_to_processor, args_to_generate, **kwargs):
         if not isinstance(args_to_processor, dict) or not isinstance(
             args_to_generate, dict
         ):
@@ -55,6 +53,7 @@ class ModelBase(abc.ABC):
 
         args_to_processor["padding"] = True
         args_to_processor["return_tensors"] = "pt"
+
         inputs = self.processor(**args_to_processor).to(
             self.device if self.device is not None else "cuda"
         )
@@ -63,7 +62,22 @@ class ModelBase(abc.ABC):
 
         generated_ids = self.model.generate(**inputs, **args_to_generate)
         generated_ids = generated_ids[:, seq_len:]
-        return self.processor.batch_decode(generated_ids, skip_special_tokens=True)
+
+        if kwargs.get("return_inputs", False):
+            return (
+                self.processor.batch_decode(generated_ids, skip_special_tokens=True),
+                inputs,
+            )
+        else:
+            return self.processor.batch_decode(generated_ids, skip_special_tokens=True)
+
+    def _extract_hf_generate_args(self, kwargs):
+        """
+        Extract key-word args that used in hf model generation from a `dict`.
+        """
+        signature = inspect.signature(self.model.generate)
+        params = signature.parameters.keys()
+        return {key: kwargs.pop(key) for key in params if key in kwargs}
 
     def apply_prompt_template(
         self,

@@ -50,36 +50,31 @@ class Idefics2(ModelBase):
     @property
     def default_prompt_template(self):
         # fmt: off
-        template =  (
+        template = (
             "{% if messages[0]['role'] == 'instruction' %}"
                 "Instruction: {{ messages[0]['content'] }}\n"
                 "{% set messages = messages[1:] %}"
             "{% endif %}"
             "{% for message in messages %}"
-                "Question: " 
-                "{% for line in message['query'] %}"
-                    "{% if line['type'] == 'text' %}"
-                        "{{ line['text'] }}"
-                    "{% elif line['type'] == 'image' %}"
-                        "{{- '<image>' }}"
-                    "{% endif %}"
-                "{% endfor %}"
-                "<end_of_utterance>\n"
-                "{% if 'answer' in message %}"
-                    "Short answer: " 
-                    "{% for line in message['answer'] %}"
+                "{% if message['role'] != '' %}"
+                    "{{ message['role'].capitalize() }}"
+                    "{% if not 'content' in message or message['content'][0]['type'] == 'image' %}"
+                        "{{':'}}"
+                    "{% else %}"
+                        "{{': '}}"
+                    "{% endif %}" 
+                "{% endif %}"
+                "{% if 'content' in message %}"
+                    "{% for line in message['content'] %}"
                         "{% if line['type'] == 'text' %}"
                             "{{ line['text'] }}"
                         "{% elif line['type'] == 'image' %}"
                             "{{- '<image>' }}"
                         "{% endif %}"
                     "{% endfor %}"
-                    "<end_of_utterance>\n"
+                "<end_of_utterance>\n"
                 "{% endif %}"
             "{% endfor %}"
-            "{% if add_generation_prompt %}"
-                "Short answer: " 
-            "{% endif %}"
         )
         # fmt: on
         if self.model_name == self.BASE_MODEL_NAME:
@@ -87,7 +82,8 @@ class Idefics2(ModelBase):
         return template
 
     def generate(self, text, images, **kwargs):
-        text = self.apply_prompt_template(text, add_generation_prompt=True)
+        text = self.apply_prompt_template(text)
+        kwargs.pop("return_inputs", False)
         return self._generate(
             {"text": text, "images": images, "padding": True, "return_tensors": "pt"},
             kwargs,

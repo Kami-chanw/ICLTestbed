@@ -20,9 +20,8 @@ class Idefics(ModelBase):
             model_root,
             torch_dtype=self.cast_dtype,
             local_files_only=True,
-            device_map=device
-            )
-
+            device_map=device,
+        )
 
     @property
     def model_name(self):
@@ -37,35 +36,30 @@ class Idefics(ModelBase):
                 "{% set messages = messages[1:] %}"
             "{% endif %}"
             "{% for message in messages %}"
-                "Question:" 
-                "{% for line in message['query'] %}"
-                    "{% if line['type'] == 'text' %}"
-                        "{{ line['text'] }}"
-                    "{% elif line['type'] == 'image' %}"
-                        "{{- '<image>' }}"
-                    "{% endif %}"
-                "{% endfor %}"
-                "\n\n"
-                "{% if 'answer' in message %}"
-                    "Short answer: " 
-                    "{% for line in message['answer'] %}"
+                "{% if message['role'] != '' %}"
+                    "{{ message['role'].capitalize() }}"
+                    "{% if not 'content' in message or message['content'][0]['type'] == 'image' %}"
+                        "{{':'}}"
+                    "{% else %}"
+                        "{{': '}}"
+                    "{% endif %}" 
+                "{% endif %}"
+                "{% if 'content' in message %}"
+                    "{% for line in message['content'] %}"
                         "{% if line['type'] == 'text' %}"
                             "{{ line['text'] }}"
                         "{% elif line['type'] == 'image' %}"
                             "{{- '<image>' }}"
                         "{% endif %}"
                     "{% endfor %}"
-                    "\n\n"
+                "\n\n"
                 "{% endif %}"
             "{% endfor %}"
-            "{% if add_generation_prompt %}"
-                "Short answer: " 
-            "{% endif %}"
         )
         # fmt: on
 
     def generate(self, texts, images, **kwargs):
-        texts = self.apply_prompt_template(texts, add_generation_prompt=True)
+        texts = self.apply_prompt_template(texts)
         inputs = []
         for i, (text, image_list) in enumerate(zip(texts, images)):
             text = text.split("<image>")
@@ -78,7 +72,7 @@ class Idefics(ModelBase):
                 if seg != "":
                     result.append(seg)
                 result.append(image)
-            if text[-1] != "": # the last question without answer
+            if text[-1] != "":  # the last question without answer
                 result.append(text[-1])
             inputs.append(result)
         return self._generate(

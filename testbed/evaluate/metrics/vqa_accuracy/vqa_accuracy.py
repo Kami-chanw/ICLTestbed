@@ -4,9 +4,8 @@ import re
 
 _DESCRIPTION = """
 VQA accuracy is a evaluation metric which is robust to inter-human variability in phrasing the answers:
-Acc(`ans`) = min{ # humans that said `ans` / 3, 1 }
+$\\text{Acc}(ans) = \\min \\left( \\frac{\\text{# humans that said }ans}{3}, 1 \\right)$
 Where `ans` is answered by machine. In order to be consistent with 'human accuracies', machine accuracies are averaged over all 10 choose 9 sets of human annotators.
-Note that to obtain results consistent with offical VQA evaluation, all inputs should be processed with `postprocess_generation` from testbed.data.vqav2.
 """
 
 
@@ -16,9 +15,9 @@ Args:
     references (`list` of `str` lists): Ground truth answers. 
     answer_types (`list` of `str`, *optional*): Answer types corresponding to each questions.
     questions_type (`list` of `str`, *optional*): Question types corresponding to each questions.
-    precision (`int`, defaults to 2): The precision of results.
+
 Returns:
-    visual question answering accuracy (`float` or `int`): Accuracy accuracy. Minimum possible value is 0. Maximum possible value is 1.0, or the number of examples input, if `normalize` is set to `True`.. A higher accuracy means higher accuracy.
+    visual question answering accuracy (`float`): Accuracy accuracy. Minimum possible value is 0. Maximum possible value is 100.
 
 """
 
@@ -227,7 +226,7 @@ def processDigitArticle(inText):
 
 
 @evaluate.utils.file_utils.add_start_docstrings(_DESCRIPTION, _KWARGS_DESCRIPTION)
-class VQAaccuracy(evaluate.Metric):
+class VQAAccuracy(evaluate.Metric):
     def _info(self):
         return evaluate.MetricInfo(
             description=_DESCRIPTION,
@@ -249,14 +248,7 @@ class VQAaccuracy(evaluate.Metric):
             ],
         )
 
-    def _compute(
-        self,
-        predictions,
-        references,
-        answer_types=None,
-        question_types=None,
-        precision=2,
-    ):
+    def _compute(self, predictions, references, answer_types=None, question_types=None):
         if answer_types is None:
             answer_types = [None] * len(predictions)
 
@@ -274,13 +266,9 @@ class VQAaccuracy(evaluate.Metric):
             predictions, references, answer_types, question_types
         ):
             # to align with offical data postprocess
-            gts = [gt_ans.replace("\n", " ").replace("\t", " ").strip() for gt_ans in gts]
             pred = pred.replace("\n", " ").replace("\t", " ").strip()
-            if len(set(gts)) > 1:
-                gts = [
-                    processDigitArticle(processPunctuation(gt_ans)) for gt_ans in gts
-                ]
-                pred = processDigitArticle(processPunctuation(pred))
+            pred = processDigitArticle(processPunctuation(pred))
+            gts = [processDigitArticle(processPunctuation(gt_ans)) for gt_ans in gts]
 
             # calculate vqa accuracy
             accuracy = []
@@ -303,21 +291,17 @@ class VQAaccuracy(evaluate.Metric):
                 ques_type_dict[ques_type].append(vqa_acc)
 
         # the following key names follow the naming of the official evaluation results
-        result = {"overall": round(100 * sum(total) / len(total), precision)}
+        result = {"overall": 100 * sum(total) / len(total)}
 
         if len(ans_type_dict) > 0:
             result["perAnswerType"] = {
-                ans_type: round(
-                    100 * sum(accuracy_list) / len(accuracy_list), precision
-                )
+                ans_type: 100 * sum(accuracy_list) / len(accuracy_list)
                 for ans_type, accuracy_list in ans_type_dict.items()
             }
 
         if len(ques_type_dict) > 0:
             result["perQuestionType"] = {
-                ques_type: round(
-                    100 * sum(accuracy_list) / len(accuracy_list), precision
-                )
+                ques_type: 100 * sum(accuracy_list) / len(accuracy_list)
                 for ques_type, accuracy_list in ques_type_dict.items()
             }
 

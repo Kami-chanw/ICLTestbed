@@ -2,7 +2,7 @@ import json
 from pathlib import Path
 import datasets
 
-from testbed.data.common import split_generators
+from testbed.data.common import split_generators, most_common_from_dict
 
 _CITATION = """\
 @article{DBLP:journals/corr/abs-1906-00067,
@@ -74,9 +74,12 @@ _SUB_FOLDER_OR_FILE_NAME = {
 
 class OKVQAConfig(datasets.BuilderConfig):
 
-    def __init__(self, images_dir=None, verbose=True, **kwargs):
+    def __init__(self, images_dir=None, verbose=True, answer_selector=None, **kwargs):
         self.images_dir = images_dir if images_dir is not None else self.data_dir
         self.verbose = verbose
+        self.answer_selector = (
+            answer_selector if answer_selector is not None else most_common_from_dict
+        )
 
         super().__init__(**kwargs)
 
@@ -101,6 +104,7 @@ class OKVQADataset(datasets.GeneratorBasedBuilder):
                         "answer_id": datasets.Value("int64"),
                     }
                 ],
+                "answer": datasets.Value("string"),
                 "image_id": datasets.Value("int64"),
                 "answer_type": datasets.Value("string"),
                 "question_id": datasets.Value("int64"),
@@ -130,7 +134,7 @@ class OKVQADataset(datasets.GeneratorBasedBuilder):
             self.config.verbose,
         )
 
-    def _generate_examples(self, questions_path, annotations_path, images_path):
+    def _generate_examples(self, split, questions_path, annotations_path, images_path):
         dataset = json.load(open(annotations_path, "r"))
         questions = json.load(open(questions_path, "r"))
 
@@ -144,6 +148,7 @@ class OKVQADataset(datasets.GeneratorBasedBuilder):
             record = question
             record.update(annotation)
             record["image"] = str(
-                images_path / f"COCO_{images_path.name}_{record['image_id']:0>12}.jpg"
+                images_path.resolve() / f"COCO_{images_path.name}_{record['image_id']:0>12}.jpg"
             )
+            record["answer"] = self.config.answer_selector(question["answers"])
             yield question["question_id"], record

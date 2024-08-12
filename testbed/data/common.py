@@ -4,6 +4,11 @@ import warnings
 import datasets
 
 
+def most_common_from_dict(dct):
+    lst = [x["answer"] for x in dct]
+    return max(set(lst), key=lst.count)
+
+
 def split_generators(
     expand_path_fn: Callable[[str, str], Path],
     type_split_file_dict: Dict[str, Dict[str, str]],
@@ -11,7 +16,8 @@ def split_generators(
 ):
     """
     This method is used in `_split_generatiors` of hugging face style datasets that derived from `datasets.GeneratorBasedBuilder`.
-    It will form and check existence of data paths passed in `_generate_examples`.
+    It will form and check existence of data paths passed in `_generate_examples`, 
+    then pass split and file type into the `generate_examples` method as parameters `split` and `{file_type}_path` respectively.
 
     Args:
         expand_path_fn (`Callable[[str, str], Path]`): 
@@ -64,8 +70,11 @@ def split_generators(
 
     gen_kwargs = {
         split_name: {
-            f"{file_type}_path": data_path[split_name][file_type]
-            for file_type in type_split_file_dict.keys()
+            **{"split": split_name},
+            **{
+                f"{file_type}_path": data_path[split_name][file_type]
+                for file_type in type_split_file_dict.keys()
+            },
         }
         for split_name in splits
     }
@@ -74,6 +83,9 @@ def split_generators(
         "train": datasets.Split.TRAIN,
         "test": datasets.Split.TEST,
         "val": datasets.Split.VALIDATION,
+        # aliasing
+        "valid": datasets.Split.VALIDATION,
+        "validation": datasets.Split.VALIDATION,
     }
 
     return [
