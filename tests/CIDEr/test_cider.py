@@ -31,7 +31,7 @@ def custom_evaluate(annotations_path, result_path):
         res[imgId] = coco_eval.cocoRes.imgToAnns[imgId]
 
     # custom evaluation procedure
-    CIDEr = evaluate.load("testbed/evaluate/metrics/CIDEr")
+    CIDEr = evaluate.load("Kamichanw/CIDEr")
     references = [[y['caption'] for y in x]for x in gts.values()]
     predicitons = [x[0]['caption'] for x in res.values()]
 
@@ -43,7 +43,7 @@ def custom_evaluate(annotations_path, result_path):
     [
         (
             os.path.join("tests", "CIDEr", "captions_val2014.json"),
-            os.path.join("tests", "CIDEr", "captions_val2014_fakecap_results.json"),
+            os.path.join("dev/result3.json"),
         ),
         # you can add more test case to validate correctness of `CIDEr`
     ],

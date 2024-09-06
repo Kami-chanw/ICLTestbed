@@ -16,6 +16,7 @@ karpathy_coco_caption_dir = "/home/share/karpathy-split"
 # model weight
 idefics_9b_path = "/home/share/pyz/model_weight/idefics-9b"
 
-
 idefics2_8b_path = "/home/share/pyz/model_weight/idefics2-8b"  # you'd better not use idefics2-8b to run icl
 idefics2_8b_base_path = "/home/share/pyz/model_weight/idefics2-8b-base"
+
+llama_3_1_8b_instruct_path = "/home/share/llama3-8b-instruct"

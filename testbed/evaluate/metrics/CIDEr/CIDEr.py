@@ -36,7 +36,7 @@ Args:
     sigma (float, defaults to 6.0): The standard deviation parameter for gaussian penalty.
 
 Returns:
-    CIDEr (`float`): CIDEr value. Minimum possible value is 0. Maximum possible value is 100.
+    CIDEr (`float`): CIDEr value. Minimum possible value is 0.
 
 """
 
