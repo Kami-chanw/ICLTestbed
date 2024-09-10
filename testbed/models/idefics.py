@@ -1,9 +1,4 @@
-import inspect
 import re
-from typing import Callable, List
-import warnings
-import torch
-from torch.utils.hooks import RemovableHandle
 from transformers import (
     IdeficsForVisionText2Text,
     IdeficsProcessor,
@@ -13,19 +8,24 @@ from testbed.models.model_base import HookType, ModelBase
 
 
 class Idefics(ModelBase):
-    def __init__(self, model_root, precision, device=None):
-        super().__init__(precision, device)
+    def __init__(
+        self,
+        model_root,
+        processor_class=IdeficsProcessor,
+        model_class=IdeficsForVisionText2Text,
+        dtype=None,
+        device=None,
+    ):
+        super().__init__(device)
 
-        self.processor = IdeficsProcessor.from_pretrained(
+        self.processor = processor_class.from_pretrained(
             model_root,
-            torch_dtype=self.cast_dtype,
-            local_files_only=True,
+            torch_dtype=dtype,
         )
 
-        self.model = IdeficsForVisionText2Text.from_pretrained(
+        self.model = model_class.from_pretrained(
             model_root,
-            torch_dtype=self.cast_dtype,
-            local_files_only=True,
+            torch_dtype=dtype,
             device_map=device,
         )
 
@@ -40,17 +40,14 @@ class Idefics(ModelBase):
         elif module_name_or_type == HookType.VISION_MODEL_LAYER:
             pattern_prefix = r"vision_model\.encoder\."
         if pattern_prefix is not None:
-            signature = inspect.signature(getattr(torch.nn.Module, register_fn_name))
-            # Remove 'always_call' from kwargs if it's not supported in this version
-            if "always_call" in kwargs and "always_call" not in signature.parameters:
-                kwargs.pop("always_call")
-            return [
-                getattr(module, register_fn_name)(hook, **kwargs)
-                for name, module in self.model.named_modules()
-                if re.search(r"model\." + pattern_prefix + r"layers\.\d+$", name)
-            ]
+            module_name_or_type = r"model\." + pattern_prefix + r"layers\.\d+$"
+
         return super()._register_hook(
-            register_fn_name, module_name_or_type, hook, **kwargs
+            register_fn_name,
+            module_name_or_type,
+            hook,
+            use_regex=kwargs.get("use_regex", False) or pattern_prefix is not None,
+            **kwargs,
         )
 
     @property
@@ -84,8 +81,11 @@ class Idefics(ModelBase):
         )
         # fmt: on
 
-    def generate(self, texts, images, **kwargs):
-        texts = self.apply_prompt_template(texts)
+    def process_input(self, texts, images, padding=True, return_tensors="pt", **kwargs):
+        if isinstance(texts[0], dict) or (
+            isinstance(texts[0], list) and isinstance(texts[0][0], dict)
+        ):
+            texts = self.apply_prompt_template(texts)
         inputs = []
         for i, (text, image_list) in enumerate(zip(texts, images)):
             text = text.split("<image>")
@@ -102,9 +102,6 @@ class Idefics(ModelBase):
                 result.append(text[-1])
             inputs.append(result)
 
-        ex_args = self._extract_extra_generate_args(kwargs)
-        return self._generate(
-            {"prompts": inputs, "padding": True, "return_tensors": "pt"},
-            kwargs,
-            **ex_args,
+        return self.processor(
+            prompts=inputs, padding=padding, return_tensors=return_tensors, **kwargs
         )

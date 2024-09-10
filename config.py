@@ -1,4 +1,5 @@
 import torch
+from pathlib import Path
 
 if torch.cuda.is_available():
     import os
@@ -8,10 +9,13 @@ if torch.cuda.is_available():
     )
 
 # path
+testbed_dir = str(Path(__file__).parent / "testbed")
 coco_dir = "/home/share/pyz/dataset/mscoco/mscoco2014"
 vqav2_dir = "/home/share/pyz/dataset/vqav2"
 ok_vqa_dir = "/home/share/pyz/dataset/okvqa"
 karpathy_coco_caption_dir = "/home/share/karpathy-split"
+
+result_dir = "/home/jyc/ICLTestbed/results"
 
 # model weight
 idefics_9b_path = "/home/share/pyz/model_weight/idefics-9b"

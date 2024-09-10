@@ -1,9 +1,4 @@
-import inspect
-import re
-from typing import Callable, List
 import warnings
-import torch
-from torch.utils.hooks import RemovableHandle
 from transformers import (
     Idefics2ForConditionalGeneration,
     Idefics2Processor,
@@ -17,9 +12,14 @@ class Idefics2(ModelBase):
     FINE_TUNED_MODEL_NAME = "idefics2-8b"
 
     def __init__(
-        self, model_root, precision="bf16", device=None, quantization_config=None
+        self,
+        model_root,
+        processor_class=Idefics2Processor,
+        model_class=Idefics2ForConditionalGeneration,
+        dtype=None,
+        device=None,
     ):
-        super().__init__(precision, device)
+        super().__init__(device)
 
         if self.BASE_MODEL_NAME in model_root:
             self._model_name = self.BASE_MODEL_NAME
@@ -31,20 +31,17 @@ class Idefics2(ModelBase):
             )
             self._model_name = None
 
-        self.processor = Idefics2Processor.from_pretrained(
+        self.processor = processor_class.from_pretrained(
             model_root,
-            torch_dtype=self.cast_dtype,
-            local_files_only=True,
+            torch_dtype=dtype,
             do_image_splitting=False,
             chat_template=self.default_prompt_template,
         )
 
-        self.model = Idefics2ForConditionalGeneration.from_pretrained(
+        self.model = model_class.from_pretrained(
             model_root,
-            torch_dtype=self.cast_dtype,
-            local_files_only=True,
+            torch_dtype=dtype,
             device_map=device,
-            quantization_config=quantization_config,
         )
 
     @property
@@ -57,18 +54,15 @@ class Idefics2(ModelBase):
             pattern_prefix = r"text_model\."
         elif module_name_or_type == HookType.VISION_MODEL_LAYER:
             pattern_prefix = r"vision_model\.encoder\."
-        if pattern_prefix:
-            signature = inspect.signature(getattr(torch.nn.Module, register_fn_name))
-            # Remove 'always_call' from kwargs if it's not supported in this version
-            if "always_call" in kwargs and "always_call" not in signature.parameters:
-                kwargs.pop("always_call")
-            return [
-                getattr(module, register_fn_name)(hook, **kwargs)
-                for name, module in self.model.named_modules()
-                if re.search(pattern_prefix + r"layers\.\d+$", name)
-            ]
+        if pattern_prefix is not None:
+            module_name_or_type = pattern_prefix + r"layers\.\d+$"
+
         return super()._register_hook(
-            register_fn_name, module_name_or_type, hook, **kwargs
+            register_fn_name,
+            module_name_or_type,
+            hook,
+            use_regex=kwargs.get("use_regex", False) or pattern_prefix is not None,
+            **kwargs
         )
 
     @property
@@ -106,11 +100,15 @@ class Idefics2(ModelBase):
             return template.replace("<end_of_utterance>", "\n")
         return template
 
-    def generate(self, text, images, **kwargs):
-        text = self.apply_prompt_template(text)
-        ex_args = self._extract_extra_generate_args(kwargs)
-        return self._generate(
-            {"text": text, "images": images, "padding": True, "return_tensors": "pt"},
-            kwargs,
-            **ex_args,
+    def process_input(self, texts, images, padding=True, return_tensors="pt", **kwargs):
+        if isinstance(texts[0], dict) or (
+            isinstance(texts[0], list) and isinstance(texts[0][0], dict)
+        ):
+            texts = self.apply_prompt_template(texts)
+        return self.processor(
+            text=texts,
+            images=images,
+            padding=padding,
+            return_tensors=return_tensors,
+            **kwargs
         )

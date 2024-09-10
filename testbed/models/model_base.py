@@ -1,10 +1,9 @@
 import abc
 import enum
-from functools import cached_property, lru_cache
+from functools import lru_cache, partial
 import inspect
 import torch
-from contextlib import suppress
-from typing import Any, Callable, Dict, List, Optional, Union
+from typing import Callable, Dict, List, Optional, Union
 
 import torch.utils
 import torch.utils.hooks
@@ -16,7 +15,7 @@ class HookType(enum.Enum):
 
 
 class ModelBase(abc.ABC):
-    def __init__(self, precision, device="auto"):
+    def __init__(self, device="auto"):
         """
         Args:
             precision (string): precision used to load model. It can be one of "bf16", "fp16", "fp32", "amp" and "amp_bf16", \
@@ -24,16 +23,6 @@ class ModelBase(abc.ABC):
             device (torch.device or str, defaults to None): device that tensors, models, etc. should be moved to. If it is set to \
             "auto", the model should load with `device_map="auto"`, in this case, any `tensor.to(device)` operation will have no effect.
         """
-        precision_dict = {
-            "bf16": torch.bfloat16,
-            "fp16": torch.float16,
-            "fp32": torch.float32,
-            "amp": torch.cuda.amp.autocast,
-            "amp_bf16": torch.cuda.amp.autocast(dtype=torch.bfloat16),
-        }
-
-        self.autocast = precision_dict.get(precision, suppress)
-        self.cast_dtype = precision_dict.get(precision, None)
 
         self.processor = None
         self.model = None
@@ -41,19 +30,74 @@ class ModelBase(abc.ABC):
 
         self.prompt_template = None
 
+    def _hook_wrapper(self, hook, **hook_args):
+        """
+        Wraps the provided hook function with additional arguments, if applicable.
+
+        This function checks whether the hook function accepts keyword arguments (**kwargs) or
+        explicitly defined arguments that are present in `hook_args`. If the hook supports **kwargs,
+        all arguments in `hook_args` are passed to the hook. Otherwise, only the arguments explicitly
+        defined in the hook function's signature and present in `hook_args` are passed. If no matching
+        arguments exist, the hook is returned unchanged.
+
+        Args:
+            hook (Callable): The hook function to be wrapped.
+            **hook_args: Additional arguments that may be passed to the hook.
+
+        Returns:
+            Callable: A partially applied function if `hook_args` contains matching arguments;
+                      otherwise, the original hook function.
+
+        Example:
+            If the hook function supports `**kwargs` or specific arguments from `hook_args`:
+
+            >>> def hook_fn(module, input, output, module_name=None):
+            >>>     print(f"Module name: {module_name}")
+
+            This wrapper will pass the `module_name` argument from `hook_args` to `hook_fn`.
+        """
+        signature = inspect.signature(hook)
+        supports_kwargs = any(
+            p.kind == inspect.Parameter.VAR_KEYWORD
+            for p in signature.parameters.values()
+        )
+        filtered_args = (
+            {k: v for k, v in hook_args.items() if k in signature.parameters}
+            if not supports_kwargs
+            else hook_args
+        )
+
+        if filtered_args:
+            return partial(hook, **filtered_args)
+        return hook
+
     def _register_hook(self, register_fn_name, module_name_or_type, hook, **kwargs):
         @lru_cache
         def module_dict():
             return {k: v for k, v in self.model.named_modules()}
 
-        register_fn = getattr(module_dict()[module_name_or_type], register_fn_name)
-        signature = inspect.signature(register_fn)
+        use_regex = kwargs.pop("use_regex", False)
+        if use_regex:
+            if not isinstance(module_name_or_type, str):
+                raise ValueError("module_name_or_type must be string if use_regex=True")
+            import re
 
-        # Remove 'always_call' from kwargs if it's not supported in this version
-        if "always_call" in kwargs and "always_call" not in signature.parameters:
-            kwargs.pop("always_call")
+            return [
+                getattr(module, register_fn_name)(
+                    self._hook_wrapper(hook, module_name=name), **kwargs
+                )
+                for name, module in module_dict().items()
+                if re.search(module_name_or_type, name)
+            ]
 
-        return register_fn(hook, **kwargs)
+        if isinstance(module_name_or_type, HookType):
+            raise ValueError(
+                f"{module_name_or_type.name} is unsupported or not implemented by {type(self).__name__}."
+            )
+
+        return getattr(module_dict()[module_name_or_type], register_fn_name)(
+            self._hook_wrapper(hook, module_name=module_name_or_type), **kwargs
+        )
 
     def register_forward_hook(
         self,
@@ -63,6 +107,7 @@ class ModelBase(abc.ABC):
         prepend: bool = False,
         with_kwargs: bool = False,
         always_call: bool = False,
+        use_regex: bool = False,
     ) -> Union[
         torch.utils.hooks.RemovableHandle, List[torch.utils.hooks.RemovableHandle]
     ]:
@@ -77,7 +122,9 @@ class ModelBase(abc.ABC):
             hook (Callable):
                 The user defined hook to be registered. The hook should have the following signature::
 
-                    hook(module, args, output) -> None or modified output
+                    hook(module, args, output, module_name) -> None or modified output
+            use_regex (bool, defaults to False):
+                If True, `module_name_or_type` will be treated as a regex pattern to match multiple module.
 
         Returns:
             `torch.utils.hooks.RemovableHandle`: a handle that can be used to remove the added hook by calling `handle.remove()`
@@ -89,6 +136,7 @@ class ModelBase(abc.ABC):
             prepend=prepend,
             with_kwargs=with_kwargs,
             always_call=always_call,
+            use_regex=use_regex,
         )
 
     def register_forward_pre_hook(
@@ -98,6 +146,7 @@ class ModelBase(abc.ABC):
         *,
         prepend: bool = False,
         with_kwargs: bool = False,
+        use_regex: bool = False,
     ) -> Union[
         torch.utils.hooks.RemovableHandle, List[torch.utils.hooks.RemovableHandle]
     ]:
@@ -112,7 +161,9 @@ class ModelBase(abc.ABC):
             hook (Callable):
                 The user defined hook to be registered. The hook should have the following signature::
 
-                    hook(module, args) -> None or modified output
+                    hook(module, args, module_name) -> None or modified output
+            use_regex (bool, defaults to False):
+                If True, `module_name_or_type` will be treated as a regex pattern to match multiple module.
 
         Returns:
             `torch.utils.hooks.RemovableHandle`: a handle that can be used to remove the added hook by calling `handle.remove()`
@@ -124,6 +175,7 @@ class ModelBase(abc.ABC):
             hook,
             prepend=prepend,
             with_kwargs=with_kwargs,
+            use_regex=use_regex,
         )
 
     def register_full_backward_hook(
@@ -131,6 +183,7 @@ class ModelBase(abc.ABC):
         module_name_or_type: Union[str, HookType],
         hook: Callable,
         prepend: bool = False,
+        use_regex: bool = False,
     ) -> Union[
         torch.utils.hooks.RemovableHandle, List[torch.utils.hooks.RemovableHandle]
     ]:
@@ -146,7 +199,9 @@ class ModelBase(abc.ABC):
             hook (Callable):
                 The user defined hook to be registered. The hook should have the following signature::
 
-                    hook(module, grad_input, grad_output) -> tuple(Tensor) or None
+                    hook(module, grad_input, grad_output, module_name) -> tuple(Tensor) or None
+            use_regex (bool, defaults to False):
+                If True, `module_name_or_type` will be treated as a regex pattern to match multiple module.
 
         Returns:
             `torch.utils.hooks.RemovableHandle`: a handle that can be used to remove the added hook by calling `handle.remove()`
@@ -156,6 +211,7 @@ class ModelBase(abc.ABC):
             module_name_or_type,
             hook,
             prepend=prepend,
+            use_regex=use_regex,
         )
 
     def register_full_backward_pre_hook(
@@ -163,6 +219,7 @@ class ModelBase(abc.ABC):
         module_name_or_type: Union[str, HookType],
         hook: Callable,
         prepend: bool = False,
+        use_regex: bool = False,
     ) -> Union[
         torch.utils.hooks.RemovableHandle, List[torch.utils.hooks.RemovableHandle]
     ]:
@@ -177,7 +234,9 @@ class ModelBase(abc.ABC):
             hook (Callable):
                 The user defined hook to be registered. The hook should have the following signature::
 
-                    hook(module, grad_output) -> tuple[Tensor] or None
+                    hook(module, grad_output, module_name) -> tuple[Tensor] or None
+            use_regex (bool, defaults to False):
+                If True, `module_name_or_type` will be treated as a regex pattern to match multiple module.
 
         Returns:
             `torch.utils.hooks.RemovableHandle`: a handle that can be used to remove the added hook by calling `handle.remove()`
@@ -188,6 +247,7 @@ class ModelBase(abc.ABC):
             module_name_or_type,
             hook,
             prepend=prepend,
+            use_regex=use_regex,
         )
 
     @property
@@ -198,51 +258,22 @@ class ModelBase(abc.ABC):
     def model_name(self) -> str:
         raise NotImplementedError
 
-    def generate(self, **kwargs):
+    def process_input(self, *args, **kwargs):
         """
-        This function will convert the input (which should be `List[Dict[str, Any]]` for unbatched and
-        `List[List[Dict[str, Any]]]` for batched) into the actual prompt (using the apply_prompt_template method for example).
+        This function will convert the input (which should be `List[Dict[str, str]]` or `List[str]` for unbatched and
+        `List[List[Dict[str, str]]]` or `List[List[str]]` for batched) into the input of models.
 
-        The positional arguments will contain custom arguments and arguments used by generate in transformers.
-        If the implementation generates with _generate, extract the custom arguments with _extract_extra_generate_args before doing so.
+        It can be regarded as a composition of `apply_prompt_template` and `processor.__call__`.
+        If input is string, `apply_prompt_template` will not be used.
         """
         raise NotImplementedError
 
-    def _generate(self, args_to_processor, args_to_generate, **kwargs):
-        if not isinstance(args_to_processor, dict) or not isinstance(
-            args_to_generate, dict
-        ):
-            raise ValueError(
-                "Implement erorr: arguments pass to `ModelBase._generate` should all be dict."
-            )
-
-        args_to_processor["padding"] = True
-        args_to_processor["return_tensors"] = "pt"
-
-        inputs = self.processor(**args_to_processor).to(
-            self.device if self.device is not None else "cuda"
-        )
-
-        seq_len = inputs.input_ids.shape[-1]
-
-        generated_ids = self.model.generate(**inputs, **args_to_generate)
-        generated_ids = generated_ids[:, seq_len:]
-
-        if kwargs.get("return_inputs", False):
-            return (
-                self.processor.batch_decode(generated_ids, skip_special_tokens=True),
-                inputs,
-            )
-        else:
-            return self.processor.batch_decode(generated_ids, skip_special_tokens=True)
-
-    def _extract_extra_generate_args(self, kwargs):
+    @torch.no_grad()
+    def generate(self, *args, **kwargs):
         """
-        Extract key-word args that used in our model generation from a `dict`.
+        A wrapper for genereate method of actual model.
         """
-        # if you need more params to control generation, add them here
-        params = ["return_inputs"]
-        return {key: kwargs.pop(key) for key in params if key in kwargs}
+        return self.model.generate(*args, **kwargs)
 
     def apply_prompt_template(
         self,

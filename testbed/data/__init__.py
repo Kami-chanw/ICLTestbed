@@ -1,5 +1,6 @@
+from ast import Tuple
 from random import shuffle
-from typing import Any, Dict, List, Optional, Union
+from typing import Any, Callable, Dict, List, Optional, Union
 from torch.utils.data import (
     Sampler,
     DataLoader,
@@ -42,12 +43,11 @@ def prepare_vqa_input(
             The field used to access the answer in each question-answer pair dictionary.
 
     Returns:
-        `Tuple[List[List[Image]], List[List[Dict[str, Any]]]]`:
-            - A list of lists containing contexts formatted as dictionaries. These contexts include the instruction
-              (if provided), questions, and answers, ready to be fed into a model for processing. The shape of this
-              list is `[batch_size, num_shots + 1]`.
-            - A list of lists containing images associated with each question-answer pair. The shape of this list
-              is `[batch_size, num_shots + 1]`.
+        - A list of lists containing contexts formatted as dictionaries. These contexts include the instruction
+            (if provided), questions, and answers, ready to be fed into a model for processing. The shape of this
+            list is `[batch_size, num_shots + 1]`.
+        - A list of lists containing images associated with each question-answer pair. The shape of this list
+            is `[batch_size, num_shots + 1]`.
     """
 
     batch_images, batch_context = [], []
@@ -115,12 +115,11 @@ def prepare_caption_input(
             The field used to extract captions from each dictionary in the batch.
 
     Returns:
-        `Tuple[List[List[Any]], List[List[Dict[str, Any]]]]`:
-            - A list of lists, where each inner list contains a sequence of dictionaries representing
-              the contextual information formatted with roles and content, including images and captions. The shape of this list
-              is `[batch_size, num_shots + 1]`.
-            - A list of lists, where each inner list contains the images for a batch. The shape of this list
-              is `[batch_size, num_shots + 1]`.
+        - A list of lists, where each inner list contains a sequence of dictionaries representing
+            the contextual information formatted with roles and content, including images and captions. The shape of this list
+            is `[batch_size, num_shots + 1]`.
+        - A list of lists, where each inner list contains the images for a batch. The shape of this list
+            is `[batch_size, num_shots + 1]`.
     """
     batch_images, batch_context = [], []
     for context in batch:
@@ -163,14 +162,16 @@ def prepare_dataloader(
     batch_size: int,
     num_shots: int,
     num_per_dataset: Optional[Union[int, List[int]]] = None,
+    collate_fn: Optional[Callable[[List[List[Any]]], Any]] = None,
     samplers: Optional[Union[Sampler, List[Sampler]]] = None,
     **kwargs,
-):
+) -> DataLoader:
     """
     Prepare a DataLoader for in-context learning using single or multiple datasets.
 
-    This function sets up a DataLoader to yield batches where each batch contains
-    a list of shape `[batch_size, num_shots + 1]`, sampling from single or multiple datasets
+    If `collate_fn` is `None`, the DataLoader will return batches as a list of shape
+    `[batch_size, num_shots + 1]`, where each sub-list contains `num_shots` in-context
+    examples and one query. The function supports sampling from single or multiple datasets
     according to the specified number of examples per dataset.
 
     Args:
@@ -183,6 +184,11 @@ def prepare_dataloader(
         num_per_dataset (`int` or `List[int]`, *optional*):
             Number of items to sample from each dataset, whose sum should be equal `to num_shots` + 1.
             It can be `None` if only one dataset is provided.
+        collate_fn (`Callable`, *optional*):
+            If `collate_fn` is `None`, the DataLoader will return batches as a list of shape
+            `[batch_size, num_shots + 1]`, where each sub-list contains `num_shots` in-context
+            examples and one query. The function supports sampling from single or multiple datasets
+            according to the specified number of examples per dataset.
         samplers (`Samper` or `List[Sampler`], *optional*):
             Samplers for each dataset. If not specified, `SequentialSampler` will be applied.
         **kwargs: Additional arguments for DataLoader.
@@ -215,7 +221,7 @@ def prepare_dataloader(
 
     def batchilize_sampler(dataset, sampler, minibatch_size):
         if sampler is None:
-            sampler =  RandomSampler(dataset) if shuffle else SequentialSampler(dataset)
+            sampler = RandomSampler(dataset) if shuffle else SequentialSampler(dataset)
         sample_idx = next(iter(sampler))
         if isinstance(sample_idx, int):
             return BatchSampler(sampler, minibatch_size, drop_last)
@@ -231,11 +237,14 @@ def prepare_dataloader(
                 "it should yield an `int` or `list` of `int` of length {minibatch_size}."
             )
 
-    def collate_fn(batch):
-        return [
+    def collate_fn_wrapper(batch):
+        batch_list = [
             batch[i * (num_shots + 1) : (i + 1) * (num_shots + 1)]
             for i in range(batch_size)
         ]
+        if collate_fn:
+            return collate_fn(batch_list)
+        return batch_list
 
     def check_consistent(name, obj, default_value):
         old_value = obj
@@ -272,7 +281,7 @@ def prepare_dataloader(
 
     return DataLoader(
         concat_dataset,
-        collate_fn=collate_fn,
+        collate_fn=collate_fn_wrapper,
         batch_sampler=BatchSamplerWrapper(concat_sampler, batch_size, drop_last),
         **kwargs,
     )
