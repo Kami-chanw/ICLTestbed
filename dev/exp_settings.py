@@ -7,7 +7,7 @@ ce_loss_weight = 0.5
 
 # data module config
 batch_size = 2
-num_shot = 4
+num_shot = 32
 num_workers = 5
 
 # generation config

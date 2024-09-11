@@ -1,4 +1,3 @@
-import re
 from transformers import (
     IdeficsForVisionText2Text,
     IdeficsProcessor,
@@ -46,7 +45,7 @@ class Idefics(ModelBase):
             register_fn_name,
             module_name_or_type,
             hook,
-            use_regex=kwargs.get("use_regex", False) or pattern_prefix is not None,
+            use_regex=kwargs.pop("use_regex", False) or pattern_prefix is not None,
             **kwargs,
         )
 
@@ -81,11 +80,19 @@ class Idefics(ModelBase):
         )
         # fmt: on
 
-    def process_input(self, texts, images, padding=True, return_tensors="pt", **kwargs):
+    def process_input(
+        self,
+        texts,
+        images,
+        padding=True,
+        return_tensors="pt",
+        prompt_template=None,
+        **kwargs,
+    ):
         if isinstance(texts[0], dict) or (
             isinstance(texts[0], list) and isinstance(texts[0][0], dict)
         ):
-            texts = self.apply_prompt_template(texts)
+            texts = self.apply_prompt_template(texts, prompt_template=prompt_template)
         inputs = []
         for i, (text, image_list) in enumerate(zip(texts, images)):
             text = text.split("<image>")
