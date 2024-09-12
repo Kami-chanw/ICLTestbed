@@ -1,12 +1,16 @@
+# dataset config
+num_train_samples = 2000
+
 # training config
 alpha_lr = 1e-2
 icv_lr = 1e-4
 weight_decay = 1e-3
 warmup_step = 0.1
 ce_loss_weight = 0.5
+strategy = "ddp"  # "deepspeed_stage_2_offload" / "ddp"
 
 # data module config
-batch_size = 2
+batch_size = 1
 num_shot = 32
 num_workers = 5
 
@@ -14,7 +18,7 @@ num_workers = 5
 num_beams = 3
 max_new_tokens = 15
 
-task = "vqa" # one of "vqa" and "caption"
+task = "vqa"  # one of "vqa" and "caption"
 vqa_instruction = "Provide an answer to the question. Use the image to answer."
 caption_instruction = ""
 

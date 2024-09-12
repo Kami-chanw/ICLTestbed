@@ -1,12 +1,12 @@
-import abc
 import enum
 from functools import lru_cache, partial
 import inspect
-import torch
-from typing import Callable, Dict, List, Optional, Union
+from typing import Any, Callable, Dict, List, Optional, Union, overload
 
-import torch.utils
-import torch.utils.hooks
+
+import torch
+from torch.utils.hooks import RemovableHandle
+import torch.nn as nn
 
 
 class HookType(enum.Enum):
@@ -14,19 +14,30 @@ class HookType(enum.Enum):
     VISION_MODEL_LAYER = enum.auto()
 
 
-class ModelBase(abc.ABC):
-    def __init__(self, device="auto"):
-        """
-        Args:
-            precision (string): precision used to load model. It can be one of "bf16", "fp16", "fp32", "amp" and "amp_bf16", \
-            which represents loading with torch.bfloat16, torch.float16, torch.float32 or auto mixture precision, respectively.
-            device (torch.device or str, defaults to None): device that tensors, models, etc. should be moved to. If it is set to \
-            "auto", the model should load with `device_map="auto"`, in this case, any `tensor.to(device)` operation will have no effect.
-        """
+class ModelBase(nn.Module):
+    def __init__(
+        self,
+        model_root,
+        processor_class,
+        model_class,
+        processor_args=None,
+        model_args=None,
+        **common_args,
+    ):
+        super().__init__()
 
-        self.processor = None
-        self.model = None
-        self.device = device if device != "auto" else None
+        processor_args = processor_args if processor_args else dict()
+        model_args = model_args if model_args else dict()
+
+        self.processor = processor_class.from_pretrained(
+            model_root,
+            **processor_args,
+            **common_args,
+        )
+
+        self.model = model_class.from_pretrained(
+            model_root, **model_args, **common_args
+        )
 
         self.prompt_template = None
 
@@ -99,6 +110,7 @@ class ModelBase(abc.ABC):
             self._hook_wrapper(hook, module_name=module_name_or_type), **kwargs
         )
 
+    @overload
     def register_forward_hook(
         self,
         module_name_or_type: Union[str, HookType],
@@ -108,9 +120,7 @@ class ModelBase(abc.ABC):
         with_kwargs: bool = False,
         always_call: bool = False,
         use_regex: bool = False,
-    ) -> Union[
-        torch.utils.hooks.RemovableHandle, List[torch.utils.hooks.RemovableHandle]
-    ]:
+    ) -> Union[RemovableHandle, List[RemovableHandle]]:
         """
         Register a forward hook on the module, see https://pytorch.org/docs/stable/generated/torch.nn.Module.html#torch.nn.Module.register_forward_hook
         for details. The hook will be called every time after forward() has computed an output.
@@ -127,18 +137,47 @@ class ModelBase(abc.ABC):
                 If True, `module_name_or_type` will be treated as a regex pattern to match multiple module.
 
         Returns:
-            `torch.utils.hooks.RemovableHandle`: a handle that can be used to remove the added hook by calling `handle.remove()`
+            `RemovableHandle`: a handle that can be used to remove the added hook by calling `handle.remove()`
         """
-        return self._register_hook(
-            "register_forward_hook",
-            module_name_or_type,
-            hook,
-            prepend=prepend,
-            with_kwargs=with_kwargs,
-            always_call=always_call,
-            use_regex=use_regex,
-        )
+        ...
 
+    @overload
+    def register_foward_hook(
+        self,
+        hook,
+        *,
+        prepend: bool = False,
+        with_kwargs: bool = False,
+        always_call: bool = False,
+    ) -> RemovableHandle:
+        """
+        Register a forward hook on this model forward, same as standard one.
+        """
+        ...
+
+    def register_forward_hook(
+        self,
+        *args,
+        prepend: bool = False,
+        with_kwargs: bool = False,
+        always_call: bool = False,
+        use_regex: bool = False,
+    ):
+        if callable(args[0]):
+            return super().register_forward_hook(
+                *args, prepend=prepend, with_kwargs=with_kwargs, always_call=always_call
+            )
+        elif len(args) >= 2 and callable(args[1]):
+            return self._register_hook(
+                "register_forward_hook",
+                *args,
+                prepend=prepend,
+                with_kwargs=with_kwargs,
+                always_call=always_call,
+                use_regex=use_regex,
+            )
+
+    @overload
     def register_forward_pre_hook(
         self,
         module_name_or_type: Union[str, HookType],
@@ -147,9 +186,7 @@ class ModelBase(abc.ABC):
         prepend: bool = False,
         with_kwargs: bool = False,
         use_regex: bool = False,
-    ) -> Union[
-        torch.utils.hooks.RemovableHandle, List[torch.utils.hooks.RemovableHandle]
-    ]:
+    ) -> Union[RemovableHandle, List[RemovableHandle]]:
         """
         Register a forward pre-hook on the module, see https://pytorch.org/docs/stable/generated/torch.nn.Module.html#torch.nn.Module.register_forward_pre_hook
         for details. The hook will be called every time before forward() is invoked.
@@ -166,27 +203,52 @@ class ModelBase(abc.ABC):
                 If True, `module_name_or_type` will be treated as a regex pattern to match multiple module.
 
         Returns:
-            `torch.utils.hooks.RemovableHandle`: a handle that can be used to remove the added hook by calling `handle.remove()`
+            `RemovableHandle`: a handle that can be used to remove the added hook by calling `handle.remove()`
         """
+        ...
 
-        return self._register_hook(
-            "register_forward_pre_hook",
-            module_name_or_type,
-            hook,
-            prepend=prepend,
-            with_kwargs=with_kwargs,
-            use_regex=use_regex,
-        )
+    @overload
+    def register_forward_pre_hook(
+        self,
+        hook: Callable,
+        *,
+        prepend: bool = False,
+        with_kwargs: bool = False,
+    ) -> RemovableHandle:
+        """
+        Register a forward pre-hook on this model forward, same as standard one.
+        """
+        ...
 
+    def register_forward_pre_hook(
+        self,
+        *args,
+        prepend: bool = False,
+        with_kwargs: bool = False,
+        use_regex: bool = False,
+    ):
+        if callable(args[0]):
+            return super().register_forward_pre_hook(
+                *args, prepend=prepend, with_kwargs=with_kwargs
+            )
+        elif len(args) >= 2 and callable(args[1]):
+            return self._register_hook(
+                "register_forward_pre_hook",
+                *args,
+                prepend=prepend,
+                with_kwargs=with_kwargs,
+                use_regex=use_regex,
+            )
+
+    @overload
     def register_full_backward_hook(
         self,
         module_name_or_type: Union[str, HookType],
         hook: Callable,
+        *,
         prepend: bool = False,
         use_regex: bool = False,
-    ) -> Union[
-        torch.utils.hooks.RemovableHandle, List[torch.utils.hooks.RemovableHandle]
-    ]:
+    ) -> Union[RemovableHandle, List[RemovableHandle]]:
         """
         Register a full_backward hook on the module, see https://pytorch.org/docs/stable/generated/torch.nn.Module.html#torch.nn.Module.register_full_backward_hook
         for details. The hook will be called every time the gradients with respect to a module are computed,
@@ -204,25 +266,47 @@ class ModelBase(abc.ABC):
                 If True, `module_name_or_type` will be treated as a regex pattern to match multiple module.
 
         Returns:
-            `torch.utils.hooks.RemovableHandle`: a handle that can be used to remove the added hook by calling `handle.remove()`
+            `RemovableHandle`: a handle that can be used to remove the added hook by calling `handle.remove()`
         """
-        return self._register_hook(
-            "register_full_backward_hook",
-            module_name_or_type,
-            hook,
-            prepend=prepend,
-            use_regex=use_regex,
-        )
+        ...
 
+    @overload
+    def register_full_backward_hook(
+        self,
+        hook: Callable,
+        *,
+        prepend: bool = False,
+    ) -> RemovableHandle:
+        """
+        Register a full_backward hook on this model, same as standard one.
+        """
+        ...
+
+    def register_full_backward_hook(
+        self,
+        *args,
+        prepend: bool = False,
+        use_regex: bool = False,
+    ):
+        if callable(args[0]):
+            return super().register_full_backward_hook(*args, prepend=prepend)
+        elif len(args) >= 2 and callable(args[1]):
+            return self._register_hook(
+                "register_full_backward_hook",
+                *args,
+                prepend=prepend,
+                use_regex=use_regex,
+            )
+
+    @overload
     def register_full_backward_pre_hook(
         self,
         module_name_or_type: Union[str, HookType],
         hook: Callable,
+        *,
         prepend: bool = False,
         use_regex: bool = False,
-    ) -> Union[
-        torch.utils.hooks.RemovableHandle, List[torch.utils.hooks.RemovableHandle]
-    ]:
+    ) -> Union[RemovableHandle, List[RemovableHandle]]:
         """
         Register a full_backward pre-hook on the module, see https://pytorch.org/docs/stable/generated/torch.nn.Module.html#torch.nn.Module.register_full_backward_pre_hook
         for details. The hook will be called every time the gradients for the module are computed.
@@ -239,16 +323,37 @@ class ModelBase(abc.ABC):
                 If True, `module_name_or_type` will be treated as a regex pattern to match multiple module.
 
         Returns:
-            `torch.utils.hooks.RemovableHandle`: a handle that can be used to remove the added hook by calling `handle.remove()`
+            `RemovableHandle`: a handle that can be used to remove the added hook by calling `handle.remove()`
         """
+        ...
 
-        return self._register_hook(
-            "register_full_backward_pre_hook",
-            module_name_or_type,
-            hook,
-            prepend=prepend,
-            use_regex=use_regex,
-        )
+    @overload
+    def register_full_backward_pre_hook(
+        self,
+        hook: Callable,
+        *,
+        prepend: bool = False,
+    ) -> RemovableHandle:
+        """
+        Register a full_backward pre-hook on this model, same as standard one.
+        """
+        ...
+
+    def register_full_backward_pre_hook(
+        self,
+        *args,
+        prepend: bool = False,
+        use_regex: bool = False,
+    ):
+        if callable(args[0]):
+            return super().register_full_backward_pre_hook(*args, prepend=prepend)
+        elif len(args) >= 2 and callable(args[1]):
+            return self._register_hook(
+                "register_full_backward_pre_hook",
+                *args,
+                prepend=prepend,
+                use_regex=use_regex,
+            )
 
     @property
     def default_prompt_template(self) -> str:
@@ -257,6 +362,10 @@ class ModelBase(abc.ABC):
     @property
     def model_name(self) -> str:
         raise NotImplementedError
+
+    @property
+    def device(self):
+        return self.model.device
 
     def process_input(self, *args, **kwargs):
         """
@@ -269,11 +378,63 @@ class ModelBase(abc.ABC):
         raise NotImplementedError
 
     @torch.no_grad()
-    def generate(self, *args, **kwargs):
+    def generate(
+        self,
+        *inputs,
+        processor_args: Dict[str, Any] = None,
+        return_inputs: bool = False,
+        return_generated_ids: bool = False,
+        **generate_args,
+    ):
         """
-        A wrapper for genereate method of actual model.
+        Generates text using the model based on the provided inputs.
+
+        Args:
+            *inputs:
+                Inputs that are further fed into `process_input`, see `process_input` docs for details.
+            processor_args (Dict[str, Any], optional):
+                Additional arguments for the `process_input` method. Defaults to None.
+            return_inputs (bool, optional):
+                Whether to include the processed inputs in the output dictionary. Defaults to False.
+            return_generated_ids (bool, optional):
+                Whether to include the generated IDs in the output dictionary. Defaults to False.
+            **generate_args:
+                Additional arguments to pass to the `generate` method of the model.
+
+        Returns:
+
+            Dict[str, Any]: A dictionary containing:
+                - 'outputs': The decoded generated text sequences.
+                - 'inputs' (optional): The processed inputs if `return_inputs` is True.
+                - 'generated_ids' (optional): The generated token IDs if `return_generated_ids` is True.
         """
-        return self.model.generate(*args, **kwargs)
+        processor_args = processor_args if processor_args else dict()
+
+        inputs = self.process_input(*inputs, **processor_args).to(self.device)
+        seq_len = inputs.input_ids.shape[-1]
+        
+        generated_ids = self.model.generate(**inputs, **generate_args)
+        generated_ids = generated_ids[:, seq_len:]
+        
+        outputs = self.processor.batch_decode(generated_ids, skip_special_tokens=True)
+
+        if return_inputs == False and return_generated_ids == False:
+            return outputs
+
+        result = {"outputs": outputs}
+        if return_inputs:
+            result["inputs"] = inputs
+        if return_generated_ids:
+            result["generated_ids"] = generated_ids
+
+        return result
+
+    def forward(
+        self, *processor_input, processor_args: Dict[str, Any] = None, **kwargs
+    ):
+        processor_args = processor_args if processor_args else dict()
+        inputs = self.process_input(*processor_input, **processor_args).to(self.device)
+        return self.model(**inputs, **kwargs)
 
     def apply_prompt_template(
         self,

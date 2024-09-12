@@ -10,7 +10,7 @@ from torch.utils.data import (
     Dataset,
     ConcatDataset,
 )
-from testbed.data.sampler import BatchSamplerWrapper, ConcatSampler
+from testbed.data.sampler import MergedBatchSampler, ConcatSampler
 
 
 def prepare_vqa_input(
@@ -282,6 +282,6 @@ def prepare_dataloader(
     return DataLoader(
         concat_dataset,
         collate_fn=collate_fn_wrapper,
-        batch_sampler=BatchSamplerWrapper(concat_sampler, batch_size, drop_last),
+        batch_sampler=MergedBatchSampler(concat_sampler, batch_size, drop_last),
         **kwargs,
     )

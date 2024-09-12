@@ -1,10 +1,10 @@
-from functools import partial
-import hydra
 import pytorch_lightning as pl
 import torch
 import torch.nn.functional as F
+import torch.optim as optim
 from deepspeed.ops.adam import DeepSpeedCPUAdam
 from transformers import get_cosine_schedule_with_warmup
+
 import exp_settings as setting
 from testbed.models.model_base import HookType
 
@@ -13,6 +13,7 @@ class ICVModel(pl.LightningModule):
     def __init__(self, lmm, icv_encoder: torch.nn.Module) -> None:
         super().__init__()
         self.lmm = lmm
+        self.lmm.requires_grad_(False)
         self.icv_encoder = icv_encoder
 
     def forward(self, ice_texts, query_texts, answers, images):
@@ -22,24 +23,19 @@ class ICVModel(pl.LightningModule):
             [
                 len(tokenizer.encode(answer, add_special_tokens=False))
                 for answer in answers
-            ]
-        ).to(self.lmm.device)
-
+            ],
+            dtype=torch.long,
+            device=self.device,
+        )
         # step 1. ICV + query answer [EOS] forward process
         hooks = self.lmm.register_forward_hook(
             HookType.TEXT_MODEL_LAYER,
-            partial(
-                self.icv_encoder.hook,
-                ice_texts=ice_texts,
-                query_texts=query_texts,
-                answers=answers,
-                images=images,
-            ),
+            self.icv_encoder.hook,
         )
         query_answer = [query + answer for query, answer in zip(query_texts, answers)]
         query_images = [img[-setting.num_image_in_query :] for img in images]
         query_inputs = self.lmm.process_input(query_answer, query_images).to(
-            self.lmm.device
+            self.device
         )
         query_outputs = self.lmm.model(
             **query_inputs,
@@ -48,13 +44,14 @@ class ICVModel(pl.LightningModule):
         icv_logits = query_outputs["logits"]
         for hook in hooks:
             hook.remove()
+        return {"loss": query_outputs["loss"]}
 
         # step 2. ICE + query and answer [EOS] forward process
         full_text = [
             ice + query + answer
             for ice, query, answer in zip(ice_texts, query_texts, answers)
         ]
-        inputs = self.lmm.process_input(full_text, images).to(self.lmm.device)
+        inputs = self.lmm.process_input(full_text, images).to(self.device)
         with torch.no_grad():
             ice_logits = self.lmm.model(**inputs)["logits"]
 
@@ -62,8 +59,8 @@ class ICVModel(pl.LightningModule):
         max_query_len = query_inputs["input_ids"].shape[1]
         max_input_len = inputs["input_ids"].shape[1]
 
-        query_range = torch.arange(max_query_len, device=answer_token_lens.device)
-        input_range = torch.arange(max_input_len, device=answer_token_lens.device)
+        query_range = torch.arange(max_query_len, device=self.device)
+        input_range = torch.arange(max_input_len, device=self.device)
 
         zero_shot_mask = query_range[None, :] >= (
             max_query_len - answer_token_lens[:, None] - 1
@@ -75,9 +72,10 @@ class ICVModel(pl.LightningModule):
         ice_probs = ice_logits[icl_context_mask].softmax(dim=-1)
         icv_log_probs = icv_logits[zero_shot_mask].log_softmax(dim=-1)
 
-        kl_loss = F.kl_div(
-            icv_log_probs, ice_probs, reduction="batchmean", log_target=False
-        )
+        # kl_loss = F.kl_div(
+        #     icv_log_probs, ice_probs, reduction="batchmean", log_target=False
+        # )
+        kl_loss = 0
         ce_loss = query_outputs["loss"]
         total_loss = kl_loss + setting.ce_loss_weight * ce_loss
 
@@ -88,17 +86,24 @@ class ICVModel(pl.LightningModule):
         }
 
     def training_step(self, batch, batch_idx):
+        print(f"{self.global_step} Before forward:")
+        for name, param in self.icv_encoder.named_parameters():
+            if param.grad is not None:
+                if torch.isnan(param.grad).any() or torch.isinf(param.grad).any():
+                    print(f"NaN or Inf gradients in {name}")
         loss_dict = self(**batch)
+
         self.log_dict(loss_dict, sync_dist=True, prog_bar=True)
 
         for i, alpha in enumerate(self.icv_encoder.alpha):
-            self.log(f"alpha/alpha-{i}", alpha[i])
+            self.log(f"alpha/alpha-{i}", alpha.item())
 
         return loss_dict["loss"]
 
     def configure_optimizers(self):
-        param_dict = {pn: p for pn, p in self.icv_encoder.named_parameters()}
-        param_dict = {pn: p for pn, p in param_dict.items() if p.requires_grad}
+        param_dict = {
+            pn: p for pn, p in self.icv_encoder.named_parameters() if p.requires_grad
+        }
 
         decay_params = [
             p for n, p in param_dict.items() if p.dim() >= 2 and "alpha" not in n
@@ -114,16 +119,23 @@ class ICVModel(pl.LightningModule):
             {"params": nodecay_params, "weight_decay": 0.0},
             {
                 "params": alpha_params,
-                "weight_decay": setting.weight_decay,
+                "weight_decay": 0.0,
                 "lr": setting.alpha_lr,
             },
         ]
 
-        optimizer = DeepSpeedCPUAdam(
-            optim_groups,
-            lr=setting.icv_lr,
-            weight_decay=setting.weight_decay,
-        )
+        if "deepspeed" in setting.strategy:
+            optimizer = DeepSpeedCPUAdam(
+                optim_groups,
+                lr=setting.icv_lr,
+                weight_decay=setting.weight_decay,
+            )
+        else:
+            optimizer = optim.Adam(
+                optim_groups,
+                lr=setting.icv_lr,
+                weight_decay=setting.weight_decay,
+            )
 
         step_batches = self.trainer.estimated_stepping_batches
         warmup_steps = setting.warmup_step

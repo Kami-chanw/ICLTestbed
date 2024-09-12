@@ -1,3 +1,5 @@
+from typing import Any, Dict, List, Union
+from PIL.Image import Image
 from transformers import (
     IdeficsForVisionText2Text,
     IdeficsProcessor,
@@ -12,20 +14,17 @@ class Idefics(ModelBase):
         model_root,
         processor_class=IdeficsProcessor,
         model_class=IdeficsForVisionText2Text,
-        dtype=None,
-        device=None,
+        processor_args=None,
+        model_args=None,
+        **common_args,
     ):
-        super().__init__(device)
-
-        self.processor = processor_class.from_pretrained(
-            model_root,
-            torch_dtype=dtype,
-        )
-
-        self.model = model_class.from_pretrained(
-            model_root,
-            torch_dtype=dtype,
-            device_map=device,
+        super().__init__(
+            model_root=model_root,
+            processor_class=processor_class,
+            model_class=model_class,
+            processor_args=processor_args,
+            model_args=model_args,
+            **common_args,
         )
 
     @property
@@ -82,13 +81,46 @@ class Idefics(ModelBase):
 
     def process_input(
         self,
-        texts,
-        images,
-        padding=True,
-        return_tensors="pt",
-        prompt_template=None,
+        texts: Union[
+            List[Union[str, Dict[str, Any]]], List[List[Union[str, Dict[str, Any]]]]
+        ],
+        images: Union[List[Image], List[List[Image]]],
+        padding: bool = True,
+        return_tensors: str = "pt",
+        prompt_template: str = None,
         **kwargs,
     ):
+        """
+        Processes text and image inputs for the model.
+
+        Args:
+            texts (Union[List[Union[str, Dict[str, Any]]], List[List[Union[str, Dict[str, Any]]]]]):
+                A list of texts or a list of lists of texts. For unbatched input, this should be a single-level list
+                where each item is either a string or a dictionary. For batched input, this should be a nested list
+                (list of lists) where each inner list represents a batch of texts. Dictionaries can follow the
+                transformers' conversation format, with keys like "role" and "content".
+
+            images (Union[List[Image], List[List[Image]]]):
+                A list of images or a list of lists of images. For unbatched input, this should be a single-level list
+                of images. For batched input, this should be a nested list where each inner list represents a batch of images.
+                Each image should be an instance of the `Image` class.
+
+            padding (bool, optional):
+                Whether to pad the inputs to the same length. Defaults to True.
+
+            return_tensors (str, optional):
+                The type of tensors to return. Defaults to "pt" for PyTorch tensors.
+                Can be set to other formats depending on the framework (e.g., "tf" for TensorFlow).
+
+            prompt_template (str, optional):
+                An optional template string used to format the input texts if they are provided as dictionaries.
+
+            **kwargs:
+                Additional keyword arguments passed to the `processor`.
+
+        Returns:
+            The output of the `processor` function, which is the processed input ready for the model.
+        """
         if isinstance(texts[0], dict) or (
             isinstance(texts[0], list) and isinstance(texts[0][0], dict)
         ):
