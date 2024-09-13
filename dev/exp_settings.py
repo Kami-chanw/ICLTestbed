@@ -1,5 +1,5 @@
 # dataset config
-num_train_samples = 2000
+num_query_samples = 2000
 
 # training config
 alpha_lr = 1e-2
@@ -7,7 +7,7 @@ icv_lr = 1e-4
 weight_decay = 1e-3
 warmup_step = 0.1
 ce_loss_weight = 0.5
-strategy = "ddp"  # "deepspeed_stage_2_offload" / "ddp"
+strategy = "deepspeed_stage_2_offload"  # "deepspeed_stage_2_offload" / "ddp"
 
 # data module config
 batch_size = 1

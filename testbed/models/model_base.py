@@ -363,9 +363,9 @@ class ModelBase(nn.Module):
     def model_name(self) -> str:
         raise NotImplementedError
 
-    @property
-    def device(self):
-        return self.model.device
+    # @property
+    # def device(self):
+    #     return self.model.device
 
     def process_input(self, *args, **kwargs):
         """
@@ -415,7 +415,7 @@ class ModelBase(nn.Module):
         
         generated_ids = self.model.generate(**inputs, **generate_args)
         generated_ids = generated_ids[:, seq_len:]
-        
+
         outputs = self.processor.batch_decode(generated_ids, skip_special_tokens=True)
 
         if return_inputs == False and return_generated_ids == False:

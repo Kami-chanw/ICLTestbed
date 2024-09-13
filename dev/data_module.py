@@ -1,6 +1,11 @@
 import pytorch_lightning as pl
 import datasets
-from torch.utils.data import DistributedSampler
+from torch.utils.data import (
+    DistributedSampler,
+    BatchSampler,
+    SequentialSampler,
+    RandomSampler,
+)
 import os
 import sys
 
@@ -33,7 +38,9 @@ class ICVDataModule(pl.LightningDataModule):
                     images_dir=config.coco_dir,
                     trust_remote_code=True,
                 )
-            self.dataset = self.dataset.shuffle().select(range(setting.num_train_samples))
+            self.query_set = self.dataset.shuffle().select(
+                range(setting.num_query_samples)
+            )
 
     def collate_fn(self, batch):
         """
@@ -69,15 +76,28 @@ class ICVDataModule(pl.LightningDataModule):
 
     def train_dataloader(self):
         if self.trainer.world_size > 1:
-            sampler = DistributedSampler(self.dataset)
+            samplers = [
+                BatchSampler(
+                    DistributedSampler(self.dataset, shuffle=True),
+                    batch_size=setting.num_shot,
+                    drop_last=True,
+                ),
+                DistributedSampler(self.query_set, shuffle=False),
+            ]
         else:
-            sampler = None
+            samplers = [
+                BatchSampler(
+                    RandomSampler(self.dataset), batch_size=32, drop_last=True
+                ),
+                SequentialSampler(self.query_set),
+            ]
+
         return prepare_dataloader(
-            self.dataset,
+            [self.dataset, self.query_set],
             setting.batch_size,
-            setting.num_shot,
+            num_per_dataset=[setting.num_shot, 1],
             collate_fn=self.collate_fn,
-            samplers=sampler,
+            samplers=samplers,
             num_workers=setting.num_workers,
             pin_memory=True,
             shuffle=True,
