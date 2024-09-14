@@ -8,8 +8,9 @@ from torch.utils.data import (
 )
 import os
 import sys
+from pathlib import Path
 
-sys.path.insert(0, "..")
+sys.path.insert(0, str(Path(__file__).parent.parent))
 from testbed.data import prepare_caption_input, prepare_dataloader, prepare_vqa_input
 import config
 import exp_settings as setting
@@ -87,7 +88,7 @@ class ICVDataModule(pl.LightningDataModule):
         else:
             samplers = [
                 BatchSampler(
-                    RandomSampler(self.dataset), batch_size=32, drop_last=True
+                    RandomSampler(self.dataset), batch_size=setting.num_shot, drop_last=True
                 ),
                 SequentialSampler(self.query_set),
             ]

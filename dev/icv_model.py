@@ -15,30 +15,50 @@ class ICVModel(pl.LightningModule):
         self.lmm = lmm
         self.lmm.requires_grad_(False)
         self.icv_encoder = icv_encoder
-        self.eos_token = self.lmm.processor.tokenizer.eos_token
 
     def forward(self, ice_texts, query_texts, answers, images):
-        tokenizer = self.lmm.processor.tokenizer
-        assert tokenizer.padding_side == "left"
-        answer_token_lens = torch.tensor(
-            [
-                len(tokenizer.encode(answer, add_special_tokens=False))
-                + 1  # + 1 for eos token
-                for answer in answers
-            ],
-            dtype=torch.long,
+        pad_token, pad_token_id, eos_token = (
+            self.lmm.processor.tokenizer.pad_token,
+            self.lmm.processor.tokenizer.pad_token_id,
+            self.lmm.processor.tokenizer.eos_token,
         )
-        # step 1. ICV + query answer [EOS] forward process
-        hooks = self.lmm.register_forward_hook(
-            HookType.TEXT_MODEL_LAYER,
-            self.icv_encoder.hook,
-        )
+
+        def generate_label_mask(inputs):
+            input_ids = inputs["input_ids"]
+            batch_size, seq_len = input_ids.shape
+            indices = (
+                torch.arange(seq_len, device=self.device)
+                .unsqueeze(0)
+                .expand(batch_size, -1)
+            )
+            non_pad_mask = input_ids != pad_token_id
+            first_non_pad_idx = non_pad_mask.int().argmax(dim=1)
+
+            mask_after_first_non_pad = indices >= first_non_pad_idx.unsqueeze(1)
+
+            separator_pad_mask = mask_after_first_non_pad & ~non_pad_mask
+            separator_positions = torch.where(
+                separator_pad_mask, indices, torch.full_like(indices, seq_len)
+            )
+            first_separator_idx = separator_positions.min(dim=1)[0]
+
+            non_answer_mask = (indices >= first_non_pad_idx.unsqueeze(1)) & (
+                indices < first_separator_idx.unsqueeze(1)
+            )
+            return non_pad_mask & ~non_answer_mask
+        
+        hooks = self.icv_encoder.register_hook_for(self.lmm)
+
+        # step 1. ICV + query + [PAD] + answer [EOS] forward process
         query_answer = [
-            query + answer + self.eos_token
+            query + pad_token + answer + eos_token
             for query, answer in zip(query_texts, answers)
         ]
         query_images = [img[-setting.num_image_in_query :] for img in images]
-        query_inputs = self.lmm.process_input(query_answer, query_images)
+        query_inputs = self.lmm.process_input(query_answer, query_images).to(
+            self.device
+        )
+        query_inputs["attention_mask"] = query_inputs["input_ids"] != pad_token_id
         query_outputs = self.lmm.model(
             **query_inputs,
             labels=query_inputs["input_ids"],
@@ -49,29 +69,19 @@ class ICVModel(pl.LightningModule):
 
         # step 2. ICE + query and answer [EOS] forward process
         full_text = [
-            ice + query + answer + self.eos_token
+            ice + query + pad_token + answer + eos_token
             for ice, query, answer in zip(ice_texts, query_texts, answers)
         ]
-        inputs = self.lmm.process_input(full_text, images)
+        inputs = self.lmm.process_input(full_text, images).to(self.device)
+        inputs["attention_mask"] = inputs["input_ids"] != pad_token_id
         with torch.no_grad():
             ice_logits = self.lmm.model(**inputs)["logits"]
 
         # step 3. extract answer logits & calculate kl divergency
-        max_query_len = query_inputs["input_ids"].shape[1]
-        max_input_len = inputs["input_ids"].shape[1]
-
-        query_range = torch.arange(max_query_len)
-        input_range = torch.arange(max_input_len)
-
-        zero_shot_mask = query_range[None, :] >= (
-            max_query_len - answer_token_lens[:, None]
+        ice_probs = ice_logits[generate_label_mask(inputs)].softmax(dim=-1)
+        icv_log_probs = icv_logits[generate_label_mask(query_inputs)].log_softmax(
+            dim=-1
         )
-        icl_context_mask = input_range[None, :] >= (
-            max_input_len - answer_token_lens[:, None]
-        )
-
-        ice_probs = ice_logits[icl_context_mask].softmax(dim=-1)
-        icv_log_probs = icv_logits[zero_shot_mask].log_softmax(dim=-1)
 
         kl_loss = F.kl_div(
             icv_log_probs, ice_probs, reduction="batchmean", log_target=False
@@ -100,35 +110,22 @@ class ICVModel(pl.LightningModule):
             pn: p for pn, p in self.icv_encoder.named_parameters() if p.requires_grad
         }
 
-        decay_params = [
-            p for n, p in param_dict.items() if p.dim() >= 2 and "alpha" not in n
-        ]
-        nodecay_params = [
-            p for n, p in param_dict.items() if p.dim() < 2 and "alpha" not in n
-        ]
-
         alpha_params = [p for n, p in param_dict.items() if "alpha" in n]
+        non_alpha_params = [p for n, p in param_dict.items() if not "alpha" in n]
 
         optim_groups = [
-            {"params": decay_params, "weight_decay": setting.weight_decay},
-            {"params": nodecay_params, "weight_decay": 0.0},
-            {
-                "params": alpha_params,
-                "weight_decay": 0.0,
-                "lr": setting.alpha_lr,
-            },
+            {"params": non_alpha_params, "lr": setting.icv_lr},
+            {"params": alpha_params, "lr": setting.alpha_lr},
         ]
 
         if "deepspeed" in setting.strategy:
             optimizer = DeepSpeedCPUAdam(
                 optim_groups,
-                lr=setting.icv_lr,
                 weight_decay=setting.weight_decay,
             )
         else:
             optimizer = optim.Adam(
                 optim_groups,
-                lr=setting.icv_lr,
                 weight_decay=setting.weight_decay,
             )
 

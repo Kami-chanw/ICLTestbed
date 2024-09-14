@@ -62,7 +62,7 @@ class ModelBase(nn.Module):
         Example:
             If the hook function supports `**kwargs` or specific arguments from `hook_args`:
 
-            >>> def hook_fn(module, input, output, module_name=None):
+            >>> def hook_fn(module, input, output, module_name):
             >>>     print(f"Module name: {module_name}")
 
             This wrapper will pass the `module_name` argument from `hook_args` to `hook_fn`.
@@ -363,9 +363,9 @@ class ModelBase(nn.Module):
     def model_name(self) -> str:
         raise NotImplementedError
 
-    # @property
-    # def device(self):
-    #     return self.model.device
+    @property
+    def device(self):
+        return self.model.device
 
     def process_input(self, *args, **kwargs):
         """

@@ -234,7 +234,7 @@ def prepare_dataloader(
         else:
             raise ValueError(
                 f"Unable to get correct index from sampler {sampler}, "
-                "it should yield an `int` or `list` of `int` of length {minibatch_size}."
+                f"it should yield an `int` or `list` of `int` of length {minibatch_size}."
             )
 
     def collate_fn_wrapper(batch):
