@@ -1,4 +1,3 @@
-import re
 from typing import List, Union
 
 
@@ -8,13 +7,8 @@ def postprocess_generation(predictions: Union[str, List[str]]):
         predictions = [predictions]
         is_batched = False
 
-    def process(pred):
-        pred = re.split("Question|Answer|Short|Long", pred, 1)[0]
-        pred = re.split(", ", pred, 1)[0]
-        return pred
-
     # more postprocess will be applied in official VQA evaluation procedure
-    result = [process(pred) for pred in predictions]
+    result = [pred.split()[0] for pred in predictions]
 
     if is_batched:
         return result

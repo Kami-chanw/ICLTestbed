@@ -3,7 +3,7 @@ import torch
 import os
 import sys
 from datasets import load_dataset
-
+os.environ["TOKENIZERS_PARALLELISM"] = 'false'
 sys.path.insert(0, "..")
 from testbed.data import prepare_dataloader
 import config
@@ -33,7 +33,7 @@ dataloader = prepare_dataloader(
 # %%
 from transformers import BitsAndBytesConfig
 from testbed.models import Idefics
-from dev.icv_encoder import GlobalICVEncoder, AttnAwareEncoder
+from dev.icv_encoder import GlobalICVEncoder, AttnAwareEncoder, AttnPerturbEncoder
 
 device = torch.device("cuda:1")
 lmm = Idefics(
@@ -41,10 +41,10 @@ lmm = Idefics(
     torch_dtype=torch.float16,
 ).to(device)
 lmm.eval()
-icv_encoder = AttnAwareEncoder(4096, 32).to(device)
+icv_encoder = AttnPerturbEncoder(4096, 32).to(device)
 
 # %%
-sd = torch.load("../results/ckpt/icv_cpk-attn-aware.pth")
+sd = torch.load("../results/ckpt/icv_cpk-attn-layer-wise.pth")
 sd = {
     k.removeprefix("icv_encoder."): v.squeeze()
     for k, v in sd.items()
@@ -56,10 +56,7 @@ icv_encoder.load_state_dict(sd, strict=False)
 from testbed.models.model_base import HookType
 
 
-hooks = lmm.register_forward_pre_hook(
-    HookType.TEXT_MODEL_LAYER,
-    icv_encoder.pre_hook,
-)
+hooks = icv_encoder.register_hook_for(lmm)
 
 # %%
 from tqdm import tqdm

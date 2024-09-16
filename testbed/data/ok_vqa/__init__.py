@@ -216,9 +216,7 @@ def postprocess_generation(predictions: Union[str, List[str]]):
         postprocess_generation.stemmer = OKVQAStemmer()
 
     def process(pred):
-        pred = re.split("Question|Answer|Short", pred, 1)[0]
-        pred = re.split(", ", pred, 1)[0]
-        return postprocess_generation.stemmer.stem(pred)
+        return postprocess_generation.stemmer.stem(pred.split()[0])
 
     result = [process(pred) for pred in predictions]
 

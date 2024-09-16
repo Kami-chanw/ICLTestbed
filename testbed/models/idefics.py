@@ -131,7 +131,7 @@ class Idefics(ModelBase):
             result = []
             if len(text) - 1 != len(image_list):
                 raise ValueError(
-                    f"In the {i}-th input, the number of images does not match the number of image tokens in the text."
+                    f"In the {i}-th input, the number of images {len(image_list)} does not match the number of image tokens {len(text) - 1} in the text."
                 )
             for seg, image in zip(text, image_list):
                 if seg != "":

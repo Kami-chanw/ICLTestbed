@@ -6,7 +6,6 @@ from deepspeed.ops.adam import DeepSpeedCPUAdam
 from transformers import get_cosine_schedule_with_warmup
 
 import exp_settings as setting
-from testbed.models.model_base import HookType
 
 
 class ICVModel(pl.LightningModule):
@@ -16,37 +15,43 @@ class ICVModel(pl.LightningModule):
         self.lmm.requires_grad_(False)
         self.icv_encoder = icv_encoder
 
-    def forward(self, ice_texts, query_texts, answers, images):
+    def generate_label_mask(self, inputs, num_separator, keep_bos=False):
+        """
+        Generates label mask which masks tokens before num_separator pad_tokens from given inputs.
+        """
+        input_ids = inputs["input_ids"]
+        batch_size, seq_len = input_ids.shape
+        pad_mask = input_ids == self.lmm.processor.tokenizer.pad_token_id
+        non_pad_mask = ~pad_mask
+        label_mask = torch.zeros_like(input_ids, dtype=torch.bool)
+        if self.lmm.processor.tokenizer.padding_side == "left":
+            eos_position = non_pad_mask.int().argmax(dim=1)
+
+        for i in range(batch_size):
+            seq_pad_positions = pad_mask[i].nonzero(as_tuple=False).squeeze(-1)
+            num_pads = len(seq_pad_positions)
+            if num_pads < num_separator:
+                raise ValueError(
+                    f"Sequence {i} has fewer pad tokens ({num_pads}) than num_separator ({num_separator})"
+                )
+
+            if self.lmm.processor.tokenizer.padding_side == "left":
+                seq_pad_positions = seq_pad_positions[
+                    seq_pad_positions > eos_position[i]
+                ]
+
+            sep_position = seq_pad_positions[num_separator - 1].item()
+            label_mask[i, sep_position + 1 :] = True
+
+        return label_mask & non_pad_mask
+
+    def kl_with_last_logits(self, ice_texts, query_texts, answers, images):
         pad_token, pad_token_id, eos_token = (
             self.lmm.processor.tokenizer.pad_token,
             self.lmm.processor.tokenizer.pad_token_id,
             self.lmm.processor.tokenizer.eos_token,
         )
 
-        def generate_label_mask(inputs):
-            input_ids = inputs["input_ids"]
-            batch_size, seq_len = input_ids.shape
-            indices = (
-                torch.arange(seq_len, device=self.device)
-                .unsqueeze(0)
-                .expand(batch_size, -1)
-            )
-            non_pad_mask = input_ids != pad_token_id
-            first_non_pad_idx = non_pad_mask.int().argmax(dim=1)
-
-            mask_after_first_non_pad = indices >= first_non_pad_idx.unsqueeze(1)
-
-            separator_pad_mask = mask_after_first_non_pad & ~non_pad_mask
-            separator_positions = torch.where(
-                separator_pad_mask, indices, torch.full_like(indices, seq_len)
-            )
-            first_separator_idx = separator_positions.min(dim=1)[0]
-
-            non_answer_mask = (indices >= first_non_pad_idx.unsqueeze(1)) & (
-                indices < first_separator_idx.unsqueeze(1)
-            )
-            return non_pad_mask & ~non_answer_mask
-        
         hooks = self.icv_encoder.register_hook_for(self.lmm)
 
         # step 1. ICV + query + [PAD] + answer [EOS] forward process
@@ -67,7 +72,7 @@ class ICVModel(pl.LightningModule):
         for hook in hooks:
             hook.remove()
 
-        # step 2. ICE + query and answer [EOS] forward process
+        # step 2. ICE + query + [PAD] answer [EOS] forward process
         full_text = [
             ice + query + pad_token + answer + eos_token
             for ice, query, answer in zip(ice_texts, query_texts, answers)
@@ -78,13 +83,11 @@ class ICVModel(pl.LightningModule):
             ice_logits = self.lmm.model(**inputs)["logits"]
 
         # step 3. extract answer logits & calculate kl divergency
-        ice_probs = ice_logits[generate_label_mask(inputs)].softmax(dim=-1)
-        icv_log_probs = icv_logits[generate_label_mask(query_inputs)].log_softmax(
-            dim=-1
-        )
-
         kl_loss = F.kl_div(
-            icv_log_probs, ice_probs, reduction="batchmean", log_target=False
+            icv_logits[self.generate_label_mask(query_inputs, 1)].log_softmax(dim=-1),
+            ice_logits[self.generate_label_mask(inputs, 1)].softmax(dim=-1),
+            reduction="batchmean",
+            log_target=False,
         )
         ce_loss = query_outputs["loss"]
         total_loss = kl_loss + setting.ce_loss_weight * ce_loss
@@ -94,6 +97,78 @@ class ICVModel(pl.LightningModule):
             "ce_loss": ce_loss,
             "loss": total_loss,
         }
+
+    def kl_each_layer(self, ice_texts, query_texts, answers, images):
+        pad_token, pad_token_id, bos_token_id, eos_token = (
+            self.lmm.processor.tokenizer.pad_token,
+            self.lmm.processor.tokenizer.pad_token_id,
+            self.lmm.processor.tokenizer.bos_token_id,
+            self.lmm.processor.tokenizer.eos_token,
+        )
+
+        hooks, record_hooks = self.icv_encoder.register_hook_for(self.lmm)
+
+        # step 1. [SOS](implicitly added) + query + [PAD] + answer [EOS] forward process
+        query_answer = [
+            query + pad_token + answer + eos_token
+            for query, answer in zip(query_texts, answers)
+        ]
+        query_images = [img[-setting.num_image_in_query :] for img in images]
+        query_inputs = self.lmm.process_input(query_answer, query_images).to(
+            self.device
+        )
+        query_inputs["attention_mask"] = query_inputs["input_ids"] != pad_token_id
+        self.lmm.model(**query_inputs)
+        # peek a hidden_state to deduce shape
+        batch_size, _, d_model = self.icv_encoder.hidden_states[0].shape
+        query_label_mask = query_inputs["attention_mask"] & (
+            query_inputs["input_ids"] != bos_token_id
+        )
+        icv_hidden_states = (
+            torch.cat(self.icv_encoder.hidden_states)
+            .masked_select(query_label_mask.unsqueeze(-1))
+            .view(batch_size, -1, d_model)
+        )
+        for hook in hooks:
+            hook.remove()
+
+        # step 2. ICE [PAD] query [PAD] answer [EOS] forward process
+        full_text = [
+            ice + pad_token + query + pad_token + answer + eos_token
+            for ice, query, answer in zip(ice_texts, query_texts, answers)
+        ]
+        inputs = self.lmm.process_input(full_text, images).to(self.device)
+        inputs["attention_mask"] = inputs["input_ids"] != pad_token_id
+        self.lmm.model(**inputs)["logits"]
+        # extract query [PAD] answer [EOS] from hidden_states
+        query_label_mask = self.generate_label_mask(inputs, 1)
+        ice_hidden_states = (
+            torch.cat(self.icv_encoder.hidden_states)
+            .masked_select(query_label_mask.unsqueeze(-1))
+            .view(batch_size, -1, d_model)
+        )
+        for hook in record_hooks:
+            hook.remove()
+
+        # step 3. calculate kl divergency of each layer
+        layer_kl_loss = F.kl_div(
+            icv_hidden_states.log_softmax(dim=-1),
+            ice_hidden_states.softmax(dim=-1),
+            reduction="batchmean",
+            log_target=False,
+        )
+
+        return {
+            "loss": layer_kl_loss,
+        }
+
+    def forward(self, ice_texts, query_texts, answers, images):
+        if (
+            not hasattr(self.icv_encoder, "hidden_states")
+            or self.icv_encoder.hidden_states is None
+        ):
+            self.kl_with_last_logits(ice_texts, query_texts, answers, images)
+        return self.kl_each_layer(ice_texts, query_texts, answers, images)
 
     def training_step(self, batch, batch_idx):
         loss_dict = self(**batch)
