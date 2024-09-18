@@ -16,7 +16,7 @@ import config
 import exp_settings as setting
 
 
-class ICVDataModule(pl.LightningDataModule):
+class DataModule(pl.LightningDataModule):
 
     def __init__(self, lmm) -> None:
         super().__init__()
@@ -88,7 +88,9 @@ class ICVDataModule(pl.LightningDataModule):
         else:
             samplers = [
                 BatchSampler(
-                    RandomSampler(self.dataset), batch_size=setting.num_shot, drop_last=True
+                    RandomSampler(self.dataset),
+                    batch_size=setting.num_shot,
+                    drop_last=True,
                 ),
                 SequentialSampler(self.query_set),
             ]

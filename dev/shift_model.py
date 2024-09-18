@@ -1,3 +1,4 @@
+import enum
 import pytorch_lightning as pl
 import torch
 import torch.nn.functional as F
@@ -8,14 +9,31 @@ from transformers import get_cosine_schedule_with_warmup
 import exp_settings as setting
 
 
-class ICVModel(pl.LightningModule):
-    def __init__(self, lmm, icv_encoder: torch.nn.Module) -> None:
+class Stratety(enum.IntFlag):
+    LAYER_WISE_KL_DIV = 1
+    LAYER_WISE_MSE = 2
+    LOGITS_KL_DIV = 4
+    LM_LOSS = 8
+    ALTERNATE_TRAINING = 16
+
+    def is_layer_wise(self):
+        return Stratety.LAYER_WISE_KL_DIV in self or Stratety.LAYER_WISE_MSE in self
+
+
+class ShiftModel(pl.LightningModule):
+    def __init__(self, lmm, icv_encoder: torch.nn.Module, strategy: Stratety) -> None:
         super().__init__()
+        if (
+            Stratety.LAYER_WISE_KL_DIV in strategy
+            and Stratety.LAYER_WISE_MSE in strategy
+        ):
+            raise ValueError("Layer wise kl loss and mse loss are mutually exclusive.")
         self.lmm = lmm
         self.lmm.requires_grad_(False)
         self.icv_encoder = icv_encoder
+        self.strategy = strategy
 
-    def generate_label_mask(self, inputs, num_separator, keep_bos=False):
+    def generate_label_mask(self, inputs, num_separator):
         """
         Generates label mask which masks tokens before num_separator pad_tokens from given inputs.
         """
@@ -45,7 +63,7 @@ class ICVModel(pl.LightningModule):
 
         return label_mask & non_pad_mask
 
-    def kl_with_last_logits(self, ice_texts, query_texts, answers, images):
+    def mse_forward(self, ice_texts, query_texts, answers, images):
         pad_token, pad_token_id, eos_token = (
             self.lmm.processor.tokenizer.pad_token,
             self.lmm.processor.tokenizer.pad_token_id,
@@ -69,7 +87,7 @@ class ICVModel(pl.LightningModule):
             labels=query_inputs["input_ids"],
         )
         icv_logits = query_outputs["logits"]
-        for hook in hooks:
+        for hook in hooks.values():
             hook.remove()
 
         # step 2. ICE + query + [PAD] answer [EOS] forward process
@@ -98,7 +116,7 @@ class ICVModel(pl.LightningModule):
             "loss": total_loss,
         }
 
-    def kl_each_layer(self, ice_texts, query_texts, answers, images):
+    def forward(self, ice_texts, query_texts, answers, images):
         pad_token, pad_token_id, bos_token_id, eos_token = (
             self.lmm.processor.tokenizer.pad_token,
             self.lmm.processor.tokenizer.pad_token_id,
@@ -106,7 +124,19 @@ class ICVModel(pl.LightningModule):
             self.lmm.processor.tokenizer.eos_token,
         )
 
-        hooks, record_hooks = self.icv_encoder.register_hook_for(self.lmm)
+        def get_hidden_states(query_label_mask):
+            hidden_states_dict = {}
+
+            for name, attr in vars(self.icv_encoder).items():
+                if "hidden_states" in name and attr is not None:
+                    hidden_states_dict[name] = attr.masked_select(
+                        query_label_mask.unsqueeze(-1)
+                    )
+
+            return hidden_states_dict
+
+        loss_dict = {"loss": 0.0}
+        hooks = self.icv_encoder.register_hook_for(self.lmm)
 
         # step 1. [SOS](implicitly added) + query + [PAD] + answer [EOS] forward process
         query_answer = [
@@ -118,65 +148,95 @@ class ICVModel(pl.LightningModule):
             self.device
         )
         query_inputs["attention_mask"] = query_inputs["input_ids"] != pad_token_id
-        self.lmm.model(**query_inputs)
-        # peek a hidden_state to deduce shape
-        batch_size, _, d_model = self.icv_encoder.hidden_states[0].shape
-        query_label_mask = query_inputs["attention_mask"] & (
-            query_inputs["input_ids"] != bos_token_id
-        )
-        icv_hidden_states = (
-            torch.cat(self.icv_encoder.hidden_states)
-            .masked_select(query_label_mask.unsqueeze(-1))
-            .view(batch_size, -1, d_model)
-        )
-        for hook in hooks:
-            hook.remove()
+        if Stratety.LM_LOSS in self.strategy:
+            query_inputs["labels"] = query_inputs["input_ids"]
 
-        # step 2. ICE [PAD] query [PAD] answer [EOS] forward process
+        query_outputs = self.lmm.model(**query_inputs)
+
+        icv_logits = query_outputs["logits"]
+        if Stratety.LM_LOSS in self.strategy:
+            loss_dict["ce_loss"] = query_outputs["loss"]
+            loss_dict["loss"] += query_outputs["loss"]
+
+        # hidden states need to be recorded only when layer-wise comparison is enabled
+        if self.strategy.is_layer_wise():
+            icv_hidden_states = get_hidden_states(
+                self.generate_label_mask(query_inputs, 1)
+                & (query_inputs["input_ids"] != bos_token_id)
+            )
+
+        # remove all shift hooks
+        for name, handles in hooks.items():
+            if "record" not in name:
+                if isinstance(handles, list):
+                    for handle in handles:
+                        handle.remove()
+                else:
+                    handles.remove()
+        hooks = {
+            name: hook_fn for name, hook_fn in hooks.items() if "record" not in name
+        }
+
+        # step 2. ICE query [PAD] answer [EOS] forward process
         full_text = [
-            ice + pad_token + query + pad_token + answer + eos_token
+            ice + query + pad_token + answer + eos_token
             for ice, query, answer in zip(ice_texts, query_texts, answers)
         ]
         inputs = self.lmm.process_input(full_text, images).to(self.device)
         inputs["attention_mask"] = inputs["input_ids"] != pad_token_id
-        self.lmm.model(**inputs)["logits"]
-        # extract query [PAD] answer [EOS] from hidden_states
-        query_label_mask = self.generate_label_mask(inputs, 1)
-        ice_hidden_states = (
-            torch.cat(self.icv_encoder.hidden_states)
-            .masked_select(query_label_mask.unsqueeze(-1))
-            .view(batch_size, -1, d_model)
-        )
-        for hook in record_hooks:
-            hook.remove()
+        with torch.no_grad():
+            ice_logits = self.lmm.model(**inputs)["logits"]
 
-        # step 3. calculate kl divergency of each layer
-        layer_kl_loss = F.kl_div(
-            icv_hidden_states.log_softmax(dim=-1),
-            ice_hidden_states.softmax(dim=-1),
-            reduction="batchmean",
-            log_target=False,
-        )
+        if self.strategy.is_layer_wise():
+            ice_hidden_states = get_hidden_states(self.generate_label_mask(inputs, 1))
+        for name, handles in hooks.items():
+            if isinstance(handles, list):
+                for handle in handles:
+                    handle.remove()
+            else:
+                handles.remove()
 
-        return {
-            "loss": layer_kl_loss,
-        }
+        # step 3. calculate kl divergency or MSE of each layer
+        if Stratety.LAYER_WISE_KL_DIV in self.strategy:
+            layer_kl_loss = dict()
+            for (icv_hs_varname, icv_hs), (ice_hs_varname, ice_hs) in zip(
+                icv_hidden_states.items(), ice_hidden_states.items()
+            ):
+                layer_kl_loss[icv_hs_varname.replace("hidden_states", "kl_loss")] = (
+                    F.kl_div(
+                        icv_hs.log_softmax(dim=-1),
+                        ice_hs.softmax(dim=-1),
+                        reduction="batchmean",
+                        log_target=False,
+                    )
+                )
+            loss_dict.update(layer_kl_loss)
+            loss_dict["loss"] += sum(layer_kl_loss.values())
 
-    def forward(self, ice_texts, query_texts, answers, images):
-        if (
-            not hasattr(self.icv_encoder, "hidden_states")
-            or self.icv_encoder.hidden_states is None
-        ):
-            self.kl_with_last_logits(ice_texts, query_texts, answers, images)
-        return self.kl_each_layer(ice_texts, query_texts, answers, images)
+        # step 4. calculate the last logits kl div
+        if Stratety.LOGITS_KL_DIV in self.strategy:
+            logits_kl_loss = F.kl_div(
+                icv_logits[self.generate_label_mask(query_inputs, 1)].log_softmax(
+                    dim=-1
+                ),
+                ice_logits[self.generate_label_mask(inputs, 1)].softmax(dim=-1),
+                reduction="batchmean",
+                log_target=False,
+            )
+            loss_dict["logits_kl_loss"] = logits_kl_loss
+            loss_dict["loss"] += logits_kl_loss
+
+        return loss_dict
 
     def training_step(self, batch, batch_idx):
         loss_dict = self(**batch)
 
         self.log_dict(loss_dict, sync_dist=True, prog_bar=True)
 
-        for i, alpha in enumerate(self.icv_encoder.alpha):
-            self.log(f"alpha/alpha-{i}", alpha.item())
+        for name, param in self.icv_encoder.named_parameters():
+            if name.startswith("alpha"):
+                for i, a in enumerate(param):
+                    self.log(f"alpha/{name}-{i}", a.item())
 
         return loss_dict["loss"]
 

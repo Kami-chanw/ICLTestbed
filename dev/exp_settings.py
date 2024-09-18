@@ -6,7 +6,7 @@ alpha_lr = 1e-2
 icv_lr = 1e-3
 weight_decay = 1e-3 
 warmup_step = 0.1
-ce_loss_weight = 0.0
+ce_loss_weight = 0.5
 strategy = "deepspeed_stage_2_offload"  # "deepspeed_stage_2_offload" / "ddp"
 
 # data module config

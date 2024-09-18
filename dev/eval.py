@@ -3,7 +3,8 @@ import torch
 import os
 import sys
 from datasets import load_dataset
-os.environ["TOKENIZERS_PARALLELISM"] = 'false'
+
+os.environ["TOKENIZERS_PARALLELISM"] = "false"
 sys.path.insert(0, "..")
 from testbed.data import prepare_dataloader
 import config
@@ -28,30 +29,32 @@ dataloader = prepare_dataloader(
     dataset,
     batch_size=hparams["batch_size"],
     num_shots=hparams["num_shots"],
+    shuffle=True,
 )
 
 # %%
 from transformers import BitsAndBytesConfig
 from testbed.models import Idefics
-from dev.icv_encoder import GlobalICVEncoder, AttnAwareEncoder, AttnPerturbEncoder
-
-device = torch.device("cuda:1")
-lmm = Idefics(
-    config.idefics_9b_path,
-    torch_dtype=torch.float16,
-).to(device)
-lmm.eval()
-icv_encoder = AttnPerturbEncoder(4096, 32).to(device)
-
-# %%
-sd = torch.load("../results/ckpt/icv_cpk-attn-layer-wise.pth")
+from dev.shift_encoder import AttnFFNShift, AttnShiftFFNLoRA
+sd = torch.load("../results/ckpt/attn-ffn-lora.pth")
 sd = {
     k.removeprefix("icv_encoder."): v.squeeze()
     for k, v in sd.items()
     if k.startswith("icv_encoder.")
 }
-icv_encoder.load_state_dict(sd, strict=False)
+device = torch.device("cuda:0")
+icv_encoder = AttnShiftFFNLoRA(
+    4096, 32, attn_shift_enabled=True, ffn_shift_enabled=True
+).to(device)
+icv_encoder.load_state_dict(sd)
 
+
+# %%
+lmm = Idefics(
+    config.idefics_9b_path,
+    torch_dtype=torch.float16,
+).to(device)
+lmm.eval()
 # %%
 from testbed.models.model_base import HookType
 
@@ -69,7 +72,9 @@ total_acc = evaluate.load("Kamichanw/vqa_accuracy")
 result = []
 
 # for simplicity, just run 10 batches
-for _, batch in zip(range(100), tqdm(dataloader, desc=f"Evaluating {lmm.model_name} ...")):
+for _, batch in zip(
+    range(100), tqdm(dataloader, desc=f"Evaluating {lmm.model_name} ...")
+):
     text, images = prepare_vqa_input(
         batch, instruction="Provide an answer to the question. Use the image to answer."
     )

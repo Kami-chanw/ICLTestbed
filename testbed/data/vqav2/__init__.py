@@ -7,8 +7,12 @@ def postprocess_generation(predictions: Union[str, List[str]]):
         predictions = [predictions]
         is_batched = False
 
+    def process(pred):
+        if pred:
+            return pred.split()[0]
+        return ""
     # more postprocess will be applied in official VQA evaluation procedure
-    result = [pred.split()[0] for pred in predictions]
+    result = [process(pred) for pred in predictions]
 
     if is_batched:
         return result

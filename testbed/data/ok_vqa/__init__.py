@@ -216,8 +216,11 @@ def postprocess_generation(predictions: Union[str, List[str]]):
         postprocess_generation.stemmer = OKVQAStemmer()
 
     def process(pred):
-        return postprocess_generation.stemmer.stem(pred.split()[0])
-
+        if pred:
+            pred = pred.split()[0]
+            return postprocess_generation.stemmer.stem()
+        return ""
+    
     result = [process(pred) for pred in predictions]
 
     if is_batched:

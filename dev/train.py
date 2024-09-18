@@ -1,9 +1,12 @@
 import os
 import shutil
 
-from data_module import ICVDataModule
-from dev.icv_encoder import GlobalICVEncoder, AttnAwareEncoder, AttnPerturbEncoder
-from icv_model import ICVModel
+from data_module import DataModule
+from dev.shift_encoder import (
+    AttnFFNShift,
+    AttnShiftFFNLoRA,
+)
+from dev.shift_model import ShiftModel, Stratety
 from pathlib import Path
 import pytorch_lightning as pl
 import torch
@@ -24,7 +27,6 @@ from pytorch_lightning.utilities.deepspeed import (
 )
 
 os.environ["TOKENIZERS_PARALLELISM"] = "false"
-os.environ["CUDA_VISIBLE_DEVICES"] = "1"
 
 
 def main():
@@ -32,7 +34,7 @@ def main():
     os.makedirs(config.result_dir, exist_ok=True)
     wb_logger = WandbLogger(
         save_dir=config.result_dir,
-        name="attn-layer-wise",
+        name="attn-ffn-lora",
         project="VQAInContextVector",
         log_model=False,
     )
@@ -43,6 +45,7 @@ def main():
             LearningRateMonitor(),
             RichProgressBar(),
         ],
+        fast_dev_run=True,
         max_epochs=10,
         devices=1,
         use_distributed_sampler=False,
@@ -57,9 +60,19 @@ def main():
         config.idefics_9b_path,
         torch_dtype=torch.float16,
     )
-    icv_encoder = AttnPerturbEncoder(4096, 32, record_hidden_states=True)
-    data_module = ICVDataModule(lmm)
-    model = ICVModel(lmm, icv_encoder)
+    icv_encoder = AttnShiftFFNLoRA(
+        4096,
+        32,
+        attn_shift_enabled=True,
+        ffn_shift_enabled=True,
+        record_attn_hidden_states=True,
+    )
+    data_module = DataModule(lmm)
+    model = ShiftModel(
+        lmm,
+        icv_encoder,
+        Stratety.LAYER_WISE_KL_DIV | Stratety.LM_LOSS | Stratety.LOGITS_KL_DIV,
+    )
     trainer.fit(
         model,
         data_module,
@@ -83,7 +96,7 @@ def convert_zero_ckpt_to_pth(save_path):
     checkpoint = torch.load(output_file)
     sd = checkpoint["state_dict"]
     sd = {n: pn for n, pn in sd.items() if not n.startswith("lmm")}
-    torch.save(sd, save_path / "icv_cpk-attn-layer-wise.pth")
+    torch.save(sd, save_path / "attn-ffn-lora.pth")
     os.remove(output_file)
     shutil.rmtree(cpk_save_path)
 
