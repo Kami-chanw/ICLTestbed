@@ -45,9 +45,8 @@ def main():
             LearningRateMonitor(),
             RichProgressBar(),
         ],
-        fast_dev_run=True,
         max_epochs=10,
-        devices=1,
+        devices=4,
         use_distributed_sampler=False,
         strategy=setting.strategy,
         precision="16-mixed",
@@ -60,18 +59,18 @@ def main():
         config.idefics_9b_path,
         torch_dtype=torch.float16,
     )
-    icv_encoder = AttnShiftFFNLoRA(
+    icv_encoder = AttnFFNShift(
         4096,
         32,
         attn_shift_enabled=True,
-        ffn_shift_enabled=True,
+        ffn_shift_enabled=False,
         record_attn_hidden_states=True,
     )
     data_module = DataModule(lmm)
     model = ShiftModel(
         lmm,
         icv_encoder,
-        Stratety.LAYER_WISE_KL_DIV | Stratety.LM_LOSS | Stratety.LOGITS_KL_DIV,
+        Stratety.LAYER_WISE_MSE,
     )
     trainer.fit(
         model,

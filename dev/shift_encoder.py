@@ -92,7 +92,7 @@ class AttnFFNShift(BaseHookEncoder):
         )
 
         assert attn_shift_enabled or ffn_shift_enabled
-    
+
     def freeze_attn_shift(self):
         self.alpha1.requires_grad_(False)
         self.attn_shift.requires_grad_(False)
@@ -100,7 +100,7 @@ class AttnFFNShift(BaseHookEncoder):
     def unfreeze_attn_shift(self):
         self.alpha1.requires_grad_(True)
         self.attn_shift.requires_grad_(True)
-    
+
     def freeze_ffn_shift(self):
         self.alpha2.requires_grad_(False)
         self.ffn_shift.requires_grad_(False)
@@ -192,14 +192,16 @@ class AttnShiftFFNLoRA(BaseHookEncoder):
         )
 
         if ffn_shift_enabled:
-            self.scaling = lora_alpha / r
+            self.alpha2 = torch.nn.Parameter(
+                torch.full((lmm_layers,), fill_value=alpha_init_value)
+            )
             self.lora_A = torch.nn.Parameter(torch.randn(lmm_layers, lmm_hidden_dim, r))
             self.lora_B = torch.nn.Parameter(torch.zeros(lmm_layers, r, lmm_hidden_dim))
 
         self.ffn_hidden_states = (
             [[] for _ in range(lmm_layers)] if record_ffn_hidden_states else None
         )
-    
+
     def freeze_attn_shift(self):
         self.alpha1.requires_grad_(False)
         self.attn_shift.requires_grad_(False)
@@ -207,7 +209,7 @@ class AttnShiftFFNLoRA(BaseHookEncoder):
     def unfreeze_attn_shift(self):
         self.alpha1.requires_grad_(True)
         self.attn_shift.requires_grad_(True)
-    
+
     def freeze_ffn_shift(self):
         self.lora_A.requires_grad_(False)
         self.lora_B.requires_grad_(False)
@@ -215,7 +217,6 @@ class AttnShiftFFNLoRA(BaseHookEncoder):
     def unfreeze_ffn_shift(self):
         self.lora_A.requires_grad_(True)
         self.lora_B.requires_grad_(True)
-
 
     def register_hook_for(self, lmm, **model_inputs):
         self_attn_layers = r"model\.layers\.\d+\.self\_attn$"
@@ -231,7 +232,7 @@ class AttnShiftFFNLoRA(BaseHookEncoder):
             ],
             {
                 "attn_hook": self.attn_hook if hasattr(self, "attn_shift") else None,
-                "ffn_hook": self.ffn_hook if hasattr(self, "ffn_shift") else None,
+                "ffn_hook": self.ffn_hook if hasattr(self, "lora_A") else None,
                 "attn_record_hook": (
                     partial(self.record_hook, record_varname="attn_hidden_states")
                     if self.attn_hidden_states is not None
@@ -267,7 +268,7 @@ class AttnShiftFFNLoRA(BaseHookEncoder):
                 hidden_states
                 + (hidden_states @ self.lora_A[layer_idx])
                 @ self.lora_B[layer_idx]
-                * self.scaling
+                * self.alpha2[layer_idx]
             )
             normalized_states = self.do_shift(hidden_states, shifted_states)
             return (normalized_states, *rest)
@@ -276,7 +277,7 @@ class AttnShiftFFNLoRA(BaseHookEncoder):
                 outputs
                 + (outputs @ self.lora_A[layer_idx])
                 @ self.lora_B[layer_idx]
-                * self.scaling
+                * self.alpha2[layer_idx]
             )
             normalized_states = self.do_shift(outputs, shifted_states)
             return normalized_states

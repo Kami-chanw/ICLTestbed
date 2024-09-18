@@ -1,6 +1,7 @@
 import enum
 from functools import lru_cache, partial
 import inspect
+import re
 from typing import Any, Callable, Dict, List, Optional, Union, overload
 
 
@@ -135,6 +136,8 @@ class ModelBase(nn.Module):
                     hook(module, args, output, module_name) -> None or modified output
             use_regex (bool, defaults to False):
                 If True, `module_name_or_type` will be treated as a regex pattern to match multiple module.
+                Note that if use_regex is True, then pattern is not required to match a whole word,
+                otherwise module_name_or_type must be exactly the same as the module name.
 
         Returns:
             `RemovableHandle`: a handle that can be used to remove the added hook by calling `handle.remove()`
@@ -201,6 +204,8 @@ class ModelBase(nn.Module):
                     hook(module, args, module_name) -> None or modified output
             use_regex (bool, defaults to False):
                 If True, `module_name_or_type` will be treated as a regex pattern to match multiple module.
+                Note that if use_regex is True, then pattern is not required to match a whole word,
+                otherwise module_name_or_type must be exactly the same as the module name.
 
         Returns:
             `RemovableHandle`: a handle that can be used to remove the added hook by calling `handle.remove()`
@@ -264,6 +269,8 @@ class ModelBase(nn.Module):
                     hook(module, grad_input, grad_output, module_name) -> tuple(Tensor) or None
             use_regex (bool, defaults to False):
                 If True, `module_name_or_type` will be treated as a regex pattern to match multiple module.
+                Note that if use_regex is True, then pattern is not required to match a whole word,
+                otherwise module_name_or_type must be exactly the same as the module name.
 
         Returns:
             `RemovableHandle`: a handle that can be used to remove the added hook by calling `handle.remove()`
@@ -321,6 +328,8 @@ class ModelBase(nn.Module):
                     hook(module, grad_output, module_name) -> tuple[Tensor] or None
             use_regex (bool, defaults to False):
                 If True, `module_name_or_type` will be treated as a regex pattern to match multiple module.
+                Note that if use_regex is True, then pattern is not required to match a whole word,
+                otherwise module_name_or_type must be exactly the same as the module name.
 
         Returns:
             `RemovableHandle`: a handle that can be used to remove the added hook by calling `handle.remove()`
@@ -412,7 +421,7 @@ class ModelBase(nn.Module):
 
         inputs = self.process_input(*inputs, **processor_args).to(self.device)
         seq_len = inputs.input_ids.shape[-1]
-        
+
         generated_ids = self.model.generate(**inputs, **generate_args)
         generated_ids = generated_ids[:, seq_len:]
 
@@ -459,3 +468,151 @@ class ModelBase(nn.Module):
         return self.processor.tokenizer.apply_chat_template(
             conversation, chat_template=prompt_template, tokenize=tokenize, **kwargs
         )
+
+    from typing import Union, List, Any
+
+
+import re
+import torch.nn as nn
+
+
+class ModelReplacementMixin:
+
+    @overload
+    def replace_module(
+        self,
+        module_name_or_type: str,
+        new_module_cls: type,
+        *,
+        use_regex: bool = True,
+        **init_args,
+    ):
+        """
+        Replaces modules in the model based on module names or types using regex or exact matching,
+        with new classes.
+
+        Args:
+            module_name_or_type (str or type):
+                The module name (str) or type (type) to match.
+            new_module_cls (type):
+                The new module class to replace the matched module(s).
+            use_regex (bool, defaults to True):
+                If True, module names are matched using regex.
+                If False, performs exact matching.
+            **init_args:
+                Additional arguments to initialize the new_module_cls.
+
+        Raises:
+            ValueError:
+                If no matching modules are found in the model.
+        """
+        pass
+
+    @overload
+    def replace_module(
+        self,
+        module_name_or_type: Union[str, type],
+        new_module_instances: Union[Any, List[Any]],
+        *,
+        use_regex: bool = True,
+    ):
+        """
+        Replaces modules in the model with specific instances. If module_name_or_type is a string and
+        use_regex is False, only one module will be matched and new_module_instances must be a single instance.
+
+        Args:
+            module_name_or_type (str or type):
+                The module name (str) or type (type) to match.
+            new_module_instances (Union[Any, List[Any]]):
+                A new module instance or list of instances to replace the matched modules.
+                If use_regex is False and module_name_or_type is a str, new_module_instances must be a single instance.
+            use_regex (bool, defaults to True):
+                If True, module names are matched using regex.
+                If False, performs exact matching.
+
+        Raises:
+            ValueError:
+                If the number of matched modules does not equal the number of provided instances.
+                If module_name_or_type is str, use_regex is False, and more than one module matches.
+        """
+        pass
+
+    def replace_module(
+        self,
+        module_name_or_type: Union[str, type],
+        new_module_cls_or_instances: Union[type, Any, List[Any]],
+        *,
+        use_regex: bool = True,
+        **init_args,
+    ):
+        """
+        Replaces modules in the model based on module names or types using regex or exact matching,
+        with either new classes or specific instances.
+
+        Args:
+            module_name_or_type (str or type):
+                The module name (str) or type (type) to match.
+            new_module_cls_or_instances (type or Any or List[Any]):
+                A new module class to instantiate or a list of new instances to replace the matched modules.
+            use_regex (bool, defaults to True):
+                If True, module names are matched using regex.
+                If False, performs exact matching.
+            **init_args:
+                Additional arguments to initialize the new_module_cls if provided.
+
+        Raises:
+            ValueError:
+                If the number of matched modules does not match the number of new instances provided.
+                If module_name_or_type is str, use_regex is False, and more than one module matches.
+        """
+        matched_modules = []
+
+        # Search and replace by name or type
+        for name, module in self.model.named_modules():
+            if isinstance(module_name_or_type, str):
+                # Handle name matching
+                if use_regex and re.search(module_name_or_type, name):
+                    matched_modules.append((name, module))
+                elif not use_regex and name == module_name_or_type:
+                    matched_modules.append((name, module))
+                    break  # Only one match is allowed for exact match with use_regex=False
+            elif isinstance(module, module_name_or_type):
+                # Handle type matching
+                matched_modules.append((name, module))
+
+        if not matched_modules:
+            raise ValueError(f"No modules found matching {module_name_or_type}")
+
+        def replace_module_by_name(name, new_module):
+            *parent_module_names, last_name = name.split(".")
+            parent_module = self.model
+            for pname in parent_module_names:
+                parent_module = getattr(parent_module, pname)
+            setattr(parent_module, last_name, new_module)
+
+        # Replace with class or instances
+        if isinstance(new_module_cls_or_instances, type):
+            # Instantiate new modules if given class
+            for name, module in matched_modules:
+                new_module = new_module_cls_or_instances(**init_args)
+                replace_module_by_name(name, new_module)
+        else:
+            # Replace with provided instances
+            if isinstance(new_module_cls_or_instances, list):
+                if len(matched_modules) != len(new_module_cls_or_instances):
+                    raise ValueError(
+                        f"Number of matched modules ({len(matched_modules)}) does not match the number of provided instances ({len(new_module_cls_or_instances)})."
+                    )
+                for (name, module), new_instance in zip(
+                    matched_modules, new_module_cls_or_instances
+                ):
+                    replace_module_by_name(name, new_instance)
+            else:
+                # Only one match is allowed when replacing with a single instance
+                if len(matched_modules) != 1:
+                    raise ValueError(
+                        "When replacing with a single instance, only one module should be matched."
+                    )
+                replace_module_by_name(
+                    matched_modules[0][0], new_module_cls_or_instances
+                )

@@ -36,6 +36,7 @@ dataloader = prepare_dataloader(
 from transformers import BitsAndBytesConfig
 from testbed.models import Idefics
 from dev.shift_encoder import AttnFFNShift, AttnShiftFFNLoRA
+
 sd = torch.load("../results/ckpt/attn-ffn-lora.pth")
 sd = {
     k.removeprefix("icv_encoder."): v.squeeze()
@@ -43,10 +44,10 @@ sd = {
     if k.startswith("icv_encoder.")
 }
 device = torch.device("cuda:0")
-icv_encoder = AttnShiftFFNLoRA(
-    4096, 32, attn_shift_enabled=True, ffn_shift_enabled=True
-).to(device)
-icv_encoder.load_state_dict(sd)
+icv_encoder = AttnFFNShift(
+    4096, 32, attn_shift_enabled=True, ffn_shift_enabled=False
+).to(device, dtype=hparams["dtype"])
+icv_encoder.load_state_dict(sd, strict=False)
 
 
 # %%
