@@ -1,5 +1,5 @@
 import enum
-from functools import partial
+from functools import reduce
 import pytorch_lightning as pl
 import torch
 import torch.nn.functional as F
@@ -8,6 +8,7 @@ from deepspeed.ops.adam import DeepSpeedCPUAdam
 from transformers import get_cosine_schedule_with_warmup
 
 import exp_settings as setting
+from shift_encoder import ShiftConfig, AttnFFNShift
 
 
 class Stratety(enum.IntFlag):
@@ -16,31 +17,55 @@ class Stratety(enum.IntFlag):
     LOGITS_KL_DIV = 4
     LM_LOSS = 8
     ALTERNATE_TRAINING = 16
+    LAYER_WISE_COS_SIM = 32
 
-    def is_layer_wise(self):
-        return Stratety.LAYER_WISE_KL_DIV in self or Stratety.LAYER_WISE_MSE in self
+    def has_layer_wise(self):
+        try:
+            self.layer_wise_strategy()
+            return True
+        except ValueError:
+            return False
+
+    def validate(self, shift_strategy):
+        layer_wise_loss = [
+            Stratety.LAYER_WISE_KL_DIV,
+            Stratety.LAYER_WISE_MSE,
+            Stratety.LAYER_WISE_COS_SIM,
+        ]
+
+        if bin(self & reduce(lambda x, y: x | y, layer_wise_loss)).count("1") > 1:
+            raise ValueError(
+                f"{[e.name for e in layer_wise_loss]} are mutually exclusive."
+            )
+
+        if (
+            self.has_layer_wise()
+            and shift_strategy & (ShiftConfig.RECORD_ATTN | ShiftConfig.RECORD_FFN) == 0
+        ):
+            raise ValueError(
+                "Shift strategy should contains ShiftConfig.RECORD_ATTN or ShiftConfig.RECORD_FFN"
+                "if layer wise loss is enabled."
+            )
 
     def layer_wise_strategy(self):
         if Stratety.LAYER_WISE_KL_DIV in self:
             return "kl_loss"
         elif Stratety.LAYER_WISE_MSE in self:
             return "mse_loss"
+        elif Stratety.LAYER_WISE_COS_SIM in self:
+            return "cos_sim"
         else:
             raise ValueError("None of layer wise loss strategy is enabled")
 
 
 class ShiftModel(pl.LightningModule):
-    def __init__(self, lmm, icv_encoder: torch.nn.Module, strategy: Stratety) -> None:
+    def __init__(self, lmm, strategy: Stratety, shift_config: ShiftConfig) -> None:
         super().__init__()
-        if (
-            Stratety.LAYER_WISE_KL_DIV in strategy
-            and Stratety.LAYER_WISE_MSE in strategy
-        ):
-            raise ValueError("Layer wise kl loss and mse loss are mutually exclusive.")
         self.lmm = lmm
         self.lmm.requires_grad_(False)
-        self.icv_encoder = icv_encoder
+        self.shift_encoder = AttnFFNShift(shift_config)
         self.strategy = strategy
+        self.strategy.validate(shift_config.strategy)
 
     def generate_label_mask(self, inputs, num_separator):
         """
@@ -88,8 +113,8 @@ class ShiftModel(pl.LightningModule):
             """
             hidden_states_dict = {}
 
-            for name, attr in vars(self.icv_encoder).items():
-                if "hidden_states" in name and attr is not None:
+            for name, attr in vars(self.shift_encoder).items():
+                if "hidden_states" in name:
                     # [num_layer, batch_size, seq_len, d_model] -> [batch_size, num_layer, seq_len, d_model]
                     hidden_states = torch.stack(attr).permute(1, 0, 2, 3)
                     batch_size, num_layer, seq_len, d_model = hidden_states.shape
@@ -101,14 +126,12 @@ class ShiftModel(pl.LightningModule):
                     ]
 
             if not hidden_states_dict:
-                raise RuntimeError(
-                    "Cannot find any *_hidden_states in shift encoder. Did you forget set record_*_hidden_states to True in __init__ of shift encoder?"
-                )
+                raise RuntimeError("Cannot find any *_hidden_states in shift encoder.")
 
             return hidden_states_dict
 
         loss_dict = {"loss": 0.0}
-        hooks = self.icv_encoder.register_hook_for(self.lmm)
+        hooks = self.shift_encoder.register_hook_for(self.lmm)
 
         # step 1. [SOS](implicitly added) + query + answer [EOS] forward process
         query_answer = [
@@ -130,14 +153,14 @@ class ShiftModel(pl.LightningModule):
             loss_dict["ce_loss"] = query_outputs["loss"]
             loss_dict["loss"] += query_outputs["loss"]
 
-        if self.strategy.is_layer_wise() or Stratety.LOGITS_KL_DIV in self.strategy:
+        if self.strategy.has_layer_wise() or Stratety.LOGITS_KL_DIV in self.strategy:
             # remove bos_token, model cannot predict bos_token
             query_label_mask = query_inputs["attention_mask"].bool() & (
                 query_inputs["input_ids"] != bos_token_id
             )
 
         # hidden states need to be recorded only when layer-wise comparison is enabled
-        if self.strategy.is_layer_wise():
+        if self.strategy.has_layer_wise():
             icv_hidden_states = get_hidden_states(query_label_mask)
 
         # remove all shift hooks
@@ -162,10 +185,10 @@ class ShiftModel(pl.LightningModule):
         with torch.no_grad():
             ice_logits = self.lmm.model(**inputs)["logits"]
 
-        if self.strategy.is_layer_wise() or Stratety.LOGITS_KL_DIV in self.strategy:
+        if self.strategy.has_layer_wise() or Stratety.LOGITS_KL_DIV in self.strategy:
             ice_label_mask = self.generate_label_mask(inputs, 1)
 
-        if self.strategy.is_layer_wise():
+        if self.strategy.has_layer_wise():
             ice_hidden_states = get_hidden_states(ice_label_mask)
 
         for name, handles in hooks.items():
@@ -176,21 +199,19 @@ class ShiftModel(pl.LightningModule):
                 handles.remove()
 
         # step 3. calculate kl divergency or MSE of each layer
-        if self.strategy.is_layer_wise():
+        if self.strategy.has_layer_wise():
 
             if Stratety.LAYER_WISE_KL_DIV in self.strategy:
-
-                def kl_div(input, target):
-                    return F.kl_div(
-                        input.log_softmax(dim=-1),
-                        target.softmax(dim=-1),
-                        reduction="batchmean",
-                        log_target=False,
-                    )
-
-                loss_fn = kl_div
+                loss_fn = lambda input, target: F.kl_div(
+                    input.log_softmax(dim=-1),
+                    target.softmax(dim=-1),
+                    reduction="batchmean",
+                    log_target=False,
+                )
             elif Stratety.LAYER_WISE_MSE in self.strategy:
                 loss_fn = F.mse_loss
+            elif Stratety.LAYER_WISE_COS_SIM in self.strategy:
+                loss_fn = lambda x1, x2: 1 - F.cosine_similarity(x1, x2, dim=-1)
 
             layer_loss = dict()
             for (icv_hs_varname, icv_hs_list), (ice_hs_varname, ice_hs_list) in zip(
@@ -229,7 +250,7 @@ class ShiftModel(pl.LightningModule):
 
         self.log_dict(loss_dict, sync_dist=True, prog_bar=True)
 
-        for name, param in self.icv_encoder.named_parameters():
+        for name, param in self.shift_encoder.named_parameters():
             if name.startswith("alpha"):
                 for i, a in enumerate(param):
                     self.log(f"alpha/{name}-{i}", a.item())
@@ -238,7 +259,7 @@ class ShiftModel(pl.LightningModule):
 
     def configure_optimizers(self):
         param_dict = {
-            pn: p for pn, p in self.icv_encoder.named_parameters() if p.requires_grad
+            pn: p for pn, p in self.shift_encoder.named_parameters() if p.requires_grad
         }
 
         alpha_params = [p for n, p in param_dict.items() if "alpha" in n]

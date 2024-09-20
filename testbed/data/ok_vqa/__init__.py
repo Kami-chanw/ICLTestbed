@@ -217,7 +217,7 @@ def postprocess_generation(predictions: Union[str, List[str]]):
 
     def process(pred):
         if pred:
-            pred = pred.split()[0]
+            pred = pred.split("\n")[0]
             return postprocess_generation.stemmer.stem()
         return ""
     

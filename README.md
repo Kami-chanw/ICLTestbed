@@ -16,8 +16,7 @@ ICLTestbed is a framework specifically designed for researchers working on in-co
 
 - **Support for multiple models and tools out of the box**:
 
-  The toolbox directly supports multiple models, datasets, and metrics.
-
+  The toolbox directly supports multiple models, datasets, and metrics. It also provided some research-friendly methods to rapidly valid
 
 </details>
 

@@ -24,7 +24,7 @@ class DataModule(pl.LightningDataModule):
 
     def setup(self, stage: str) -> None:
         if stage == "fit" or stage is None:
-            if setting.task == "vqa":
+            if setting.dataset == "vqav2":
                 self.dataset = datasets.load_dataset(
                     os.path.join(config.testbed_dir, "data", "vqav2"),
                     split="train",
@@ -32,9 +32,18 @@ class DataModule(pl.LightningDataModule):
                     images_dir=config.coco_dir,
                     trust_remote_code=True,
                 )
-            elif setting.task == "caption":
+            elif setting.dataset == "ok_vqa":
+                self.dataset = datasets.load_dataset(
+                    os.path.join(config.testbed_dir, "data", "ok_vqa"),
+                    split="train",
+                    data_dir=config.ok_vqa_dir,
+                    images_dir=config.coco_dir,
+                    trust_remote_code=True,
+                )
+            elif setting.dataset == "coco_cap":
                 self.dataset = datasets.load_dataset(
                     os.path.join(config.testbed_dir, "data", "coco"),
+                    split="train",
                     data_dir=config.karpathy_coco_caption_dir,
                     images_dir=config.coco_dir,
                     trust_remote_code=True,
@@ -47,13 +56,13 @@ class DataModule(pl.LightningDataModule):
         """
         Split batch into full context, in-context examples, query and answer, and process them into model inputs.
         """
-        if setting.task == "vqa":
+        if setting.dataset in ["vqav2", "ok_vqa"]:
             context, images = prepare_vqa_input(
                 batch, instruction=setting.vqa_instruction
             )
             # we use the first answer as grounding truth
             answers = [item[-1]["answers"][0]["answer"] for item in batch]
-        elif setting.task == "caption":
+        elif setting.dataset == "caption":
             context, images = prepare_caption_input(
                 batch, instruction=setting.caption_instruction
             )

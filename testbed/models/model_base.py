@@ -469,42 +469,34 @@ class ModelBase(nn.Module):
             conversation, chat_template=prompt_template, tokenize=tokenize, **kwargs
         )
 
-    from typing import Union, List, Any
-
-
-import re
-import torch.nn as nn
-
-
-class ModelReplacementMixin:
-
     @overload
     def replace_module(
         self,
         module_name_or_type: str,
-        new_module_cls: type,
+        new_module_cls: nn.Module,
         *,
         use_regex: bool = True,
         **init_args,
     ):
         """
-        Replaces modules in the model based on module names or types using regex or exact matching,
-        with new classes.
+        Replace modules in the model by matching their names or types, using either regex
+        or exact string matching.
 
         Args:
             module_name_or_type (str or type):
-                The module name (str) or type (type) to match.
-            new_module_cls (type):
+                Name or type of the module to be replaced.
+            new_module_cls (nn.Module):
                 The new module class to replace the matched module(s).
             use_regex (bool, defaults to True):
-                If True, module names are matched using regex.
-                If False, performs exact matching.
+                If True, uses regex for matching module names.
+                If False, uses exact string matching.
             **init_args:
-                Additional arguments to initialize the new_module_cls.
+                Arguments to initialize the new module.
 
         Raises:
             ValueError:
-                If no matching modules are found in the model.
+                If no matching modules are found, or if the new module's forward method
+                has incompatible parameter names with the original module.
         """
         pass
 
@@ -512,92 +504,99 @@ class ModelReplacementMixin:
     def replace_module(
         self,
         module_name_or_type: Union[str, type],
-        new_module_instances: Union[Any, List[Any]],
+        new_module_instances: Union[nn.Module, List[nn.Module]],
         *,
         use_regex: bool = True,
     ):
         """
-        Replaces modules in the model with specific instances. If module_name_or_type is a string and
-        use_regex is False, only one module will be matched and new_module_instances must be a single instance.
+        Replace specific instances of modules in the model by matching their names or types.
+        If `module_name_or_type` is a string and `use_regex` is False, only one module will
+        be matched, and `new_module_instances` must be a single instance.
 
         Args:
             module_name_or_type (str or type):
-                The module name (str) or type (type) to match.
-            new_module_instances (Union[Any, List[Any]]):
-                A new module instance or list of instances to replace the matched modules.
-                If use_regex is False and module_name_or_type is a str, new_module_instances must be a single instance.
+                Name or type of the module to be replaced.
+            new_module_instances (Union[nn.Module, List[nn.Module]]):
+                New module instance(s) to replace the matched modules.
             use_regex (bool, defaults to True):
-                If True, module names are matched using regex.
-                If False, performs exact matching.
+                If True, uses regex for matching module names.
+                If False, uses exact string matching.
 
         Raises:
             ValueError:
-                If the number of matched modules does not equal the number of provided instances.
-                If module_name_or_type is str, use_regex is False, and more than one module matches.
+                If the number of matched modules doesn't match the number of provided instances,
+                or if the new module's forward method has incompatible parameter names with the original module.
         """
         pass
 
     def replace_module(
         self,
         module_name_or_type: Union[str, type],
-        new_module_cls_or_instances: Union[type, Any, List[Any]],
+        new_module_cls_or_instances: Union[type, nn.Module, List[nn.Module]],
         *,
         use_regex: bool = True,
         **init_args,
     ):
         """
-        Replaces modules in the model based on module names or types using regex or exact matching,
-        with either new classes or specific instances.
+        Replace modules in the model based on names or types, with either new classes or specific instances.
+        Checks whether the `forward` method of the new module has compatible parameter names
+        with the original module's `forward` method.
 
         Args:
             module_name_or_type (str or type):
-                The module name (str) or type (type) to match.
-            new_module_cls_or_instances (type or Any or List[Any]):
-                A new module class to instantiate or a list of new instances to replace the matched modules.
+                Name or type of the module to be replaced.
+            new_module_cls_or_instances (nn.Module or List[nn.Module]):
+                A new module class or instance(s) to replace the matched modules.
             use_regex (bool, defaults to True):
-                If True, module names are matched using regex.
-                If False, performs exact matching.
+                If True, uses regex for matching module names.
+                If False, uses exact string matching.
             **init_args:
-                Additional arguments to initialize the new_module_cls if provided.
+                Additional arguments to initialize the new module if providing a class.
 
         Raises:
             ValueError:
-                If the number of matched modules does not match the number of new instances provided.
-                If module_name_or_type is str, use_regex is False, and more than one module matches.
+                If the number of matched modules does not match the number of new instances provided,
+                or if the new module's forward method has incompatible parameter names with the original module.
         """
         matched_modules = []
 
-        # Search and replace by name or type
-        for name, module in self.model.named_modules():
-            if isinstance(module_name_or_type, str):
-                # Handle name matching
-                if use_regex and re.search(module_name_or_type, name):
-                    matched_modules.append((name, module))
-                elif not use_regex and name == module_name_or_type:
-                    matched_modules.append((name, module))
-                    break  # Only one match is allowed for exact match with use_regex=False
-            elif isinstance(module, module_name_or_type):
-                # Handle type matching
-                matched_modules.append((name, module))
+        def replace_module_by_name(name, original_module, new_module):
+            orig_params = list(
+                inspect.signature(original_module.forward).parameters.keys()
+            )
+            new_params = list(inspect.signature(new_module.forward).parameters.keys())
 
-        if not matched_modules:
-            raise ValueError(f"No modules found matching {module_name_or_type}")
+            if orig_params[: len(new_params)] != new_params[: len(new_params)]:
+                raise ValueError(
+                    "The first few parameters of the new module's forward method do not match "
+                    "the original module's. If you want to add new parameters, they should be "
+                    "at the end of the parameter list."
+                )
 
-        def replace_module_by_name(name, new_module):
             *parent_module_names, last_name = name.split(".")
             parent_module = self.model
             for pname in parent_module_names:
                 parent_module = getattr(parent_module, pname)
             setattr(parent_module, last_name, new_module)
 
-        # Replace with class or instances
+        for name, module in self.model.named_modules():
+            if isinstance(module_name_or_type, str):
+                if use_regex and re.search(module_name_or_type, name):
+                    matched_modules.append((name, module))
+                elif not use_regex and name == module_name_or_type:
+                    matched_modules.append((name, module))
+                    break
+            elif isinstance(module, module_name_or_type):
+                matched_modules.append((name, module))
+
+        if not matched_modules:
+            raise ValueError(f"No modules found matching {module_name_or_type}")
+
         if isinstance(new_module_cls_or_instances, type):
-            # Instantiate new modules if given class
             for name, module in matched_modules:
                 new_module = new_module_cls_or_instances(**init_args)
-                replace_module_by_name(name, new_module)
+                replace_module_by_name(name, module, new_module)
         else:
-            # Replace with provided instances
             if isinstance(new_module_cls_or_instances, list):
                 if len(matched_modules) != len(new_module_cls_or_instances):
                     raise ValueError(
@@ -606,13 +605,14 @@ class ModelReplacementMixin:
                 for (name, module), new_instance in zip(
                     matched_modules, new_module_cls_or_instances
                 ):
-                    replace_module_by_name(name, new_instance)
+                    replace_module_by_name(name, module, new_instance)
             else:
-                # Only one match is allowed when replacing with a single instance
                 if len(matched_modules) != 1:
                     raise ValueError(
                         "When replacing with a single instance, only one module should be matched."
                     )
                 replace_module_by_name(
-                    matched_modules[0][0], new_module_cls_or_instances
+                    matched_modules[0][0],
+                    matched_modules[0][1],
+                    new_module_cls_or_instances,
                 )

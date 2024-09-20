@@ -1,10 +1,10 @@
 # dataset config
-num_query_samples = 300
+num_query_samples = 8000
 
 # training config
 alpha_lr = 1e-2
 icv_lr = 1e-3
-weight_decay = 1e-3 
+weight_decay = 1e-3
 warmup_step = 0.1
 ce_loss_weight = 0.5
 strategy = "deepspeed_stage_2_offload"  # "deepspeed_stage_2_offload" / "ddp"
@@ -17,7 +17,7 @@ num_workers = 5
 # generation config
 generate_args = dict(num_beams=3, max_new_tokens=10, length_penalty=0.0)
 
-task = "vqa"  # one of "vqa" and "caption"
+dataset = "vqav2"  # [vqav2, ok_vqa, coco_cap]
 vqa_instruction = "Provide an answer to the question. Use the image to answer."
 caption_instruction = ""
 

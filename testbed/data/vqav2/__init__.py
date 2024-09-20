@@ -9,7 +9,7 @@ def postprocess_generation(predictions: Union[str, List[str]]):
 
     def process(pred):
         if pred:
-            return pred.split()[0]
+            return pred.split("\n")[0]
         return ""
     # more postprocess will be applied in official VQA evaluation procedure
     result = [process(pred) for pred in predictions]

@@ -4,7 +4,8 @@ import shutil
 from data_module import DataModule
 from dev.shift_encoder import (
     AttnFFNShift,
-    AttnShiftFFNLoRA,
+    ShiftConfig,
+    ShiftConfig,
 )
 from dev.shift_model import ShiftModel, Stratety
 from pathlib import Path
@@ -59,18 +60,13 @@ def main():
         config.idefics_9b_path,
         torch_dtype=torch.float16,
     )
-    icv_encoder = AttnFFNShift(
-        4096,
-        32,
-        attn_shift_enabled=True,
-        ffn_shift_enabled=False,
-        record_attn_hidden_states=True,
-    )
     data_module = DataModule(lmm)
     model = ShiftModel(
         lmm,
-        icv_encoder,
         Stratety.LAYER_WISE_MSE,
+        ShiftConfig(
+            4096, 32, strategy=ShiftConfig.ATTENTION_SHIFT | ShiftConfig.RECORD_ATTN
+        ),
     )
     trainer.fit(
         model,
