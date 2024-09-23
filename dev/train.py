@@ -2,12 +2,11 @@ import os
 import shutil
 
 from data_module import DataModule
-from dev.shift_encoder import (
+from shift_encoder import (
     AttnFFNShift,
-    ShiftConfig,
-    ShiftConfig,
+    ShiftStrategy,
 )
-from dev.shift_model import ShiftModel, Stratety
+from shift_model import ShiftModel, Stratety
 from pathlib import Path
 import pytorch_lightning as pl
 import torch
@@ -35,7 +34,8 @@ def main():
     os.makedirs(config.result_dir, exist_ok=True)
     wb_logger = WandbLogger(
         save_dir=config.result_dir,
-        name="attn-ffn-lora",
+        name="attn-lora-mse",
+        # name="attn-shift-lm-logits-kl",
         project="VQAInContextVector",
         log_model=False,
     )
@@ -46,27 +46,33 @@ def main():
             LearningRateMonitor(),
             RichProgressBar(),
         ],
+        # fast_dev_run=True,
         max_epochs=10,
-        devices=4,
+        devices=len(os.environ["CUDA_VISIBLE_DEVICES"].split(",")),
         use_distributed_sampler=False,
         strategy=setting.strategy,
         precision="16-mixed",
         gradient_clip_val=1.0,
         log_every_n_steps=10,
-        accumulate_grad_batches=4,
+        accumulate_grad_batches=setting.accumulate_grad_batches,
         enable_checkpointing=False,
     )
     lmm = Idefics(
         config.idefics_9b_path,
         torch_dtype=torch.float16,
     )
+
     data_module = DataModule(lmm)
+    shift_encoder = AttnFFNShift(
+        4096,
+        32,
+        attn_strategy=ShiftStrategy.USE_VECTOR_IMPL,
+        ffn_strategy=ShiftStrategy.RECORD_HIDDEN_STATES,
+    )
     model = ShiftModel(
         lmm,
+        shift_encoder,
         Stratety.LAYER_WISE_MSE,
-        ShiftConfig(
-            4096, 32, strategy=ShiftConfig.ATTENTION_SHIFT | ShiftConfig.RECORD_ATTN
-        ),
     )
     trainer.fit(
         model,
@@ -91,7 +97,7 @@ def convert_zero_ckpt_to_pth(save_path):
     checkpoint = torch.load(output_file)
     sd = checkpoint["state_dict"]
     sd = {n: pn for n, pn in sd.items() if not n.startswith("lmm")}
-    torch.save(sd, save_path / "attn-ffn-lora.pth")
+    torch.save(sd, save_path / "attn-lora-mse.pth")
     os.remove(output_file)
     shutil.rmtree(cpk_save_path)
 

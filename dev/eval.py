@@ -10,8 +10,22 @@ from dev.shift_model import Stratety
 from testbed.data import prepare_dataloader
 import config
 import exp_settings as setting
+from torch.utils.data import RandomSampler, SequentialSampler, BatchSampler
 
-dataset = load_dataset(
+hparams = {
+    "batch_size": 8,
+    "num_shots": 0,
+    "dtype": torch.bfloat16,
+    "generate_args": {"num_beams": 3, "max_new_tokens": 5},
+}
+# ice_set = load_dataset(
+#     os.path.join(config.testbed_dir, "data", "vqav2"),
+#     split="train",
+#     data_dir=config.vqav2_dir,
+#     images_dir=config.coco_dir,
+#     trust_remote_code=True,
+# )
+query_set = load_dataset(
     os.path.join(config.testbed_dir, "data", "vqav2"),
     split="validation",
     data_dir=".",
@@ -19,33 +33,25 @@ dataset = load_dataset(
     trust_remote_code=True,
 )
 
-hparams = {
-    "batch_size": 16,
-    "num_shots": 0,
-    "dtype": torch.float16,
-    "generate_args": setting.generate_args,
-}
-
 dataloader = prepare_dataloader(
-    dataset,
+    query_set,
     batch_size=hparams["batch_size"],
     num_shots=hparams["num_shots"],
-    shuffle=True,
 )
 
 # %%
 from transformers import BitsAndBytesConfig
 from testbed.models import Idefics
-from dev.shift_encoder import AttnFFNShift, ShiftConfig, ShiftConfig
+from shift_encoder import AttnFFNShift, ShiftStrategy
 
-sd = torch.load("../results/ckpt/attn-ffn-lora.pth")
+sd = torch.load("../results/ckpt/attn-lora-mse.pth")
 sd = {
-    k.removeprefix("icv_encoder."): v.squeeze()
+    k.removeprefix("shift_encoder."): v.squeeze()
     for k, v in sd.items()
-    if k.startswith("icv_encoder.")
+    if k.startswith("shift_encoder.")
 }
-device = torch.device("cuda:0")
-icv_encoder = AttnFFNShift(ShiftConfig(4096, 32, strategy=ShiftConfig.FFN_SHIFT)).to(
+device = torch.device("cuda:2")
+icv_encoder = AttnFFNShift(4096, 32, attn_strategy=ShiftStrategy.USE_VECTOR_IMPL).to(
     device, dtype=hparams["dtype"]
 )
 icv_encoder.load_state_dict(sd)
@@ -61,7 +67,7 @@ lmm.eval()
 from testbed.models.model_base import HookType
 
 
-hooks = icv_encoder.register_hook_for(lmm)
+hooks = icv_encoder.register_shift_hooks(lmm)
 
 # %%
 from tqdm import tqdm
@@ -72,9 +78,25 @@ from testbed.data.vqav2 import postprocess_generation
 
 total_acc = evaluate.load("Kamichanw/vqa_accuracy")
 result = []
+# lmm.prompt_template = """{% if messages[0]['role'] == 'instruction' -%}
+# Instruction: {{ messages[0]['content'] }}
+# {%- set messages = messages[1:] %}
+# {%- endif %}
+# {%- for message in messages %}
+# {%- if 'content' in message and message['content'] and message['content'][0]['type'] == 'image' %}
+# \n<image>
+# {%- endif %} {{ message['role'].capitalize() }}: {%- if 'content' in message %}
+# {%- for line in message['content'] %}
+# {%- if line['type'] == 'text' %} {{ line['text'] }}{%- endif %}
+# {%- endfor %}{%- endif %}
+# {%- if not loop.last %}\n{%- endif %}
+# {%- endfor %}"""
+# import re
 
 # for simplicity, just run 10 batches
-for batch in tqdm(dataloader, desc=f"Evaluating {lmm.model_name} ..."):
+for _, batch in zip(
+    range(1000), tqdm(dataloader, desc=f"Evaluating {lmm.model_name} ...")
+):
     text, images = prepare_vqa_input(
         batch, instruction="Provide an answer to the question. Use the image to answer."
     )
@@ -83,6 +105,7 @@ for batch in tqdm(dataloader, desc=f"Evaluating {lmm.model_name} ..."):
         last_qa = context[-1]
         gt_answer = [item["answer"] for item in last_qa["answers"]]
         prediction = postprocess_generation(pred)
+        # prediction = re.split("Short|Question|Long", prediction)[0]
         total_acc.add(
             prediction=prediction,
             reference=gt_answer,

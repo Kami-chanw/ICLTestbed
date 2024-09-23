@@ -2,6 +2,7 @@ import enum
 from functools import lru_cache, partial
 import inspect
 import re
+from types import MethodType
 from typing import Any, Callable, Dict, List, Optional, Union, overload
 
 
@@ -42,46 +43,46 @@ class ModelBase(nn.Module):
 
         self.prompt_template = None
 
-    def _hook_wrapper(self, hook, **hook_args):
+    def _try_inject_params(self, fn, **kwargs):
         """
-        Wraps the provided hook function with additional arguments, if applicable.
+        Try to inject positional arguments to fn, if applicable.
 
-        This function checks whether the hook function accepts keyword arguments (**kwargs) or
-        explicitly defined arguments that are present in `hook_args`. If the hook supports **kwargs,
-        all arguments in `hook_args` are passed to the hook. Otherwise, only the arguments explicitly
-        defined in the hook function's signature and present in `hook_args` are passed. If no matching
-        arguments exist, the hook is returned unchanged.
+        This function checks whether the function accepts keyword arguments (**kwargs) or
+        explicitly defined arguments that are present in `kwargs`. If the function supports **kwargs,
+        all arguments in `kwargs` are passed to the fn. Otherwise, only the arguments explicitly
+        defined in the function's signature and present in `kwargs` are passed. If no matching
+        arguments exist, the fn is returned unchanged.
 
         Args:
-            hook (Callable): The hook function to be wrapped.
-            **hook_args: Additional arguments that may be passed to the hook.
+            fn (Callable): The function to be injected.
+            **kwargs: Additional arguments that may be passed to the fn.
 
         Returns:
-            Callable: A partially applied function if `hook_args` contains matching arguments;
-                      otherwise, the original hook function.
+            Callable: A partially applied function if `kwargs` contains matching arguments;
+                      otherwise, the original function.
 
         Example:
-            If the hook function supports `**kwargs` or specific arguments from `hook_args`:
+            If the function supports `**kwargs` or specific arguments from `kwargs`:
 
             >>> def hook_fn(module, input, output, module_name):
             >>>     print(f"Module name: {module_name}")
 
-            This wrapper will pass the `module_name` argument from `hook_args` to `hook_fn`.
+            This wrapper will pass the `module_name` argument from `kwargs` to `fn`.
         """
-        signature = inspect.signature(hook)
+        signature = inspect.signature(fn)
         supports_kwargs = any(
             p.kind == inspect.Parameter.VAR_KEYWORD
             for p in signature.parameters.values()
         )
         filtered_args = (
-            {k: v for k, v in hook_args.items() if k in signature.parameters}
+            {k: v for k, v in kwargs.items() if k in signature.parameters}
             if not supports_kwargs
-            else hook_args
+            else kwargs
         )
 
         if filtered_args:
-            return partial(hook, **filtered_args)
-        return hook
+            return partial(fn, **filtered_args)
+        return fn
 
     def _register_hook(self, register_fn_name, module_name_or_type, hook, **kwargs):
         @lru_cache
@@ -96,7 +97,7 @@ class ModelBase(nn.Module):
 
             return [
                 getattr(module, register_fn_name)(
-                    self._hook_wrapper(hook, module_name=name), **kwargs
+                    self._try_inject_params(hook, module_name=name), **kwargs
                 )
                 for name, module in module_dict().items()
                 if re.search(module_name_or_type, name)
@@ -108,7 +109,7 @@ class ModelBase(nn.Module):
             )
 
         return getattr(module_dict()[module_name_or_type], register_fn_name)(
-            self._hook_wrapper(hook, module_name=module_name_or_type), **kwargs
+            self._try_inject_params(hook, module_name=module_name_or_type), **kwargs
         )
 
     @overload
@@ -472,10 +473,11 @@ class ModelBase(nn.Module):
     @overload
     def replace_module(
         self,
-        module_name_or_type: str,
+        module_name_or_type: Union[str, nn.Module],
         new_module_cls: nn.Module,
         *,
         use_regex: bool = True,
+        strict: bool = True,
         **init_args,
     ):
         """
@@ -483,13 +485,16 @@ class ModelBase(nn.Module):
         or exact string matching.
 
         Args:
-            module_name_or_type (str or type):
+            module_name_or_type (str or nn.Module):
                 Name or type of the module to be replaced.
             new_module_cls (nn.Module):
                 The new module class to replace the matched module(s).
             use_regex (bool, defaults to True):
                 If True, uses regex for matching module names.
                 If False, uses exact string matching.
+            strict (bool, defaults to True):
+                If True, checks that the new function's signature is compatible with the old method's signature.
+                If False, skips signature checking.
             **init_args:
                 Arguments to initialize the new module.
 
@@ -503,10 +508,11 @@ class ModelBase(nn.Module):
     @overload
     def replace_module(
         self,
-        module_name_or_type: Union[str, type],
+        module_name_or_type: Union[str, nn.Module],
         new_module_instances: Union[nn.Module, List[nn.Module]],
         *,
         use_regex: bool = True,
+        strict: bool = True,
     ):
         """
         Replace specific instances of modules in the model by matching their names or types.
@@ -514,13 +520,16 @@ class ModelBase(nn.Module):
         be matched, and `new_module_instances` must be a single instance.
 
         Args:
-            module_name_or_type (str or type):
+            module_name_or_type (str or nn.Module):
                 Name or type of the module to be replaced.
             new_module_instances (Union[nn.Module, List[nn.Module]]):
                 New module instance(s) to replace the matched modules.
             use_regex (bool, defaults to True):
                 If True, uses regex for matching module names.
                 If False, uses exact string matching.
+            strict (bool, defaults to True):
+                If True, checks that the new function's signature is compatible with the old method's signature.
+                If False, skips signature checking.
 
         Raises:
             ValueError:
@@ -531,10 +540,11 @@ class ModelBase(nn.Module):
 
     def replace_module(
         self,
-        module_name_or_type: Union[str, type],
-        new_module_cls_or_instances: Union[type, nn.Module, List[nn.Module]],
+        module_name_or_type: Union[str, nn.Module],
+        new_module_cls_or_instances: Union[nn.Module, List[nn.Module]],
         *,
         use_regex: bool = True,
+        strict: bool = True,
         **init_args,
     ):
         """
@@ -543,13 +553,16 @@ class ModelBase(nn.Module):
         with the original module's `forward` method.
 
         Args:
-            module_name_or_type (str or type):
+            module_name_or_type (str or nn.Module):
                 Name or type of the module to be replaced.
             new_module_cls_or_instances (nn.Module or List[nn.Module]):
                 A new module class or instance(s) to replace the matched modules.
             use_regex (bool, defaults to True):
                 If True, uses regex for matching module names.
                 If False, uses exact string matching.
+            strict (bool, defaults to True):
+                If True, checks that the new function's signature is compatible with the old method's signature.
+                If False, skips signature checking.
             **init_args:
                 Additional arguments to initialize the new module if providing a class.
 
@@ -561,17 +574,20 @@ class ModelBase(nn.Module):
         matched_modules = []
 
         def replace_module_by_name(name, original_module, new_module):
-            orig_params = list(
-                inspect.signature(original_module.forward).parameters.keys()
-            )
-            new_params = list(inspect.signature(new_module.forward).parameters.keys())
-
-            if orig_params[: len(new_params)] != new_params[: len(new_params)]:
-                raise ValueError(
-                    "The first few parameters of the new module's forward method do not match "
-                    "the original module's. If you want to add new parameters, they should be "
-                    "at the end of the parameter list."
+            if strict:
+                orig_params = list(
+                    inspect.signature(original_module.forward).parameters.keys()
                 )
+                new_params = list(
+                    inspect.signature(new_module.forward).parameters.keys()
+                )
+
+                if orig_params != new_params[: len(orig_params)]:
+                    raise ValueError(
+                        "The first few parameters of the new module's forward method do not match "
+                        "the original module's. If you want to add new parameters, they should be "
+                        "at the end of the parameter list."
+                    )
 
             *parent_module_names, last_name = name.split(".")
             parent_module = self.model
@@ -616,3 +632,74 @@ class ModelBase(nn.Module):
                     matched_modules[0][1],
                     new_module_cls_or_instances,
                 )
+
+    def replace_module_method(
+        self,
+        module_name_or_type: Union[str, nn.Module],
+        method_name: str,
+        new_method: Callable,
+        *,
+        use_regex: bool = True,
+        strict: bool = True,
+    ):
+        """
+        Replace a method of modules in the model based on names or types, with a new function.
+        Optionally checks whether the new function's signature is compatible with the old method's signature.
+        The new function will have `module_name` and `old_method` injected as keyword arguments, if possible.
+
+        Args:
+            module_name_or_type (str or nn.Module):
+                Name or type of the module whose method is to be replaced.
+            method_name (str):
+                The name of the method to replace (e.g., 'forward').
+            new_fn (Callable):
+                A new function to replace the matched method.
+            use_regex (bool, defaults to True):
+                If True, uses regex for matching module names. If False, uses exact string matching.
+            strict (bool, defaults to True):
+                If True, checks that the new function's signature is compatible with the old method's signature.
+                If False, skips signature checking.
+
+        Raises:
+            ValueError: If no module matches the given name or type, or if the new method's signature is incompatible with the old method's signature when strict is True.
+        """
+        matched_modules = []
+
+        for name, module in self.model.named_modules():
+            if isinstance(module_name_or_type, str):
+                if use_regex and re.search(module_name_or_type, name):
+                    matched_modules.append((name, module))
+                elif not use_regex and name == module_name_or_type:
+                    matched_modules.append((name, module))
+                    break
+            elif isinstance(module, module_name_or_type):
+                matched_modules.append((name, module))
+
+        if not matched_modules:
+            raise ValueError(f"No modules found matching {module_name_or_type}")
+
+        for name, module in matched_modules:
+            old_method = getattr(module, method_name, None)
+            if old_method is None:
+                raise ValueError(f"Module '{name}' has no method '{method_name}'")
+            if strict:
+                orig_params = list(inspect.signature(old_method).parameters.keys())
+                new_params = list(inspect.signature(new_method).parameters.keys())
+                if "self" not in orig_params and isinstance(old_method, MethodType):
+                    orig_params.insert(0, "self")
+                if orig_params != new_params[: len(orig_params)]:
+                    raise ValueError(
+                        f"The first few parameters of the new function do not match "
+                        f"the original method '{method_name}' of module '{name}'."
+                    )
+
+            setattr(
+                module,
+                method_name,
+                MethodType(
+                    self._try_inject_params(
+                        new_method, module_name=name, old_method=old_method
+                    ),
+                    module,
+                ),
+            )
