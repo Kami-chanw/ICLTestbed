@@ -10,9 +10,9 @@ ce_loss_weight = 0.5
 strategy = "deepspeed_stage_2_offload"  # "deepspeed_stage_2_offload" / "ddp"
 
 # data module config
-batch_size = 2
-accumulate_grad_batches = 2
-num_shot = 32
+batch_size = 1
+accumulate_grad_batches = 4
+num_shot = 16
 num_workers = 5
 grad_clip_val = 1.0
 
