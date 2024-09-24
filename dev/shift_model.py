@@ -124,7 +124,7 @@ class ShiftModel(pl.LightningModule):
         for name, attr in vars(self.shift_encoder).items():
             if "hidden_states" in name:
                 # [num_layer, batch_size, seq_len, d_model] -> [batch_size, num_layer, seq_len, d_model]
-                hidden_states = torch.stack(attr).permute(1, 0, 2, 3)
+                hidden_states = torch.stack(attr).transpose(0, 1)
                 batch_size, num_layer, seq_len, d_model = hidden_states.shape
                 hidden_states_dict[name] = [
                     hs.masked_select(mask[None, :, None]).view(num_layer, -1, d_model)
@@ -272,23 +272,16 @@ class ShiftModel(pl.LightningModule):
         loss_dict = self.forward(**batch)
         self.log_dict(loss_dict, sync_dist=True, prog_bar=True)
 
-        # for name, param in self.shift_encoder.named_parameters():
-        #     if name.startswith("alpha"):
-        #         for i, a in enumerate(param):
-        #             self.log(f"alpha/{name}-{i}", a.item())
-
         return loss_dict["loss"]
 
     def configure_optimizers(self):
         param_dict = {
             n: p for n, p in self.shift_encoder.named_parameters() if p.requires_grad
         }
-        # alpha_params = [p for n, p in param_dict.items() if "alpha" in n]
         non_alpha_params = [p for n, p in param_dict.items() if not "alpha" in n]
 
         optim_groups = [
             {"params": non_alpha_params, "lr": setting.icv_lr},
-            # {"params": alpha_params, "lr": setting.alpha_lr},
         ]
 
         if "deepspeed" in setting.strategy:

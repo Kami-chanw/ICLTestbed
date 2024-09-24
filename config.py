@@ -36,12 +36,12 @@ elif "a6000" in network_node_name:
 elif "ubuntu" in network_node_name:
     # 4x3090
     coco_dir = "/data/share/pyz/data/mscoco/mscoco2014"
-    vqav2_dir = "/data/share/pyz/dataset/vqav2"
-    ok_vqa_dir = "/data/share/pyz/dataset/okvqa"
+    vqav2_dir = "/data/share/pyz/vqav2"
+    ok_vqa_dir = "/data/share/pyz/okvqa"
     karpathy_coco_caption_dir = "/data/share/karpathy-split"
-    idefics_9b_path = "/data/share/pyz/model_weight/idefics-9b"
+    idefics_9b_path = "/data1/pyz/model_weight/idefics-9b"
 
-    idefics2_8b_path = "/data/share/pyz/model_weight/idefics2-8b"  # you'd better not use idefics2-8b to run icl
-    idefics2_8b_base_path = "/data/share/pyz/model_weight/idefics2-8b-base"
+    idefics2_8b_path = "/data1/pyz/model_weight/idefics2-8b"  # you'd better not use idefics2-8b to run icl
+    idefics2_8b_base_path = "/data1/pyz/model_weight/idefics2-8b-base"
 else:
     raise RuntimeError("Unknow host")

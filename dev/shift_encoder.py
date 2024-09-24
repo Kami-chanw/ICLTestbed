@@ -56,8 +56,9 @@ class BaseHookEncoder(nn.Module):
 class ShiftStrategy(enum.IntFlag):
     USE_VECTOR_IMPL = 1
     USE_LORA_IMPL = 2
-    RECORD_HIDDEN_STATES = 4
-    FROZEN = 8
+    USE_STRANGE_ATTN_IMPL = 4
+    RECORD_HIDDEN_STATES = 8
+    FROZEN = 16
 
 
 class AttnFFNShift(BaseHookEncoder):
@@ -67,7 +68,6 @@ class AttnFFNShift(BaseHookEncoder):
         lmm_layers,
         attn_strategy: ShiftStrategy = None,
         ffn_strategy: ShiftStrategy = None,
-        alpha_init_value=0.1,
         **kwargs,
     ):
         super().__init__()
@@ -80,8 +80,15 @@ class AttnFFNShift(BaseHookEncoder):
                     p.requires_grad_(ShiftStrategy.FROZEN not in strategy)
 
             if (
-                ShiftStrategy.USE_VECTOR_IMPL in strategy
-                and ShiftStrategy.USE_LORA_IMPL in strategy
+                bin(
+                    strategy
+                    & (
+                        ShiftStrategy.USE_VECTOR_IMPL
+                        | ShiftStrategy.USE_LORA_IMPL
+                        | ShiftStrategy.USE_STRANGE_ATTN_IMPL
+                    )
+                ).count("1")
+                > 1
             ):
                 raise ValueError(
                     "The shift implementation methods are mutually exclusive."
@@ -90,13 +97,6 @@ class AttnFFNShift(BaseHookEncoder):
             def add_attr(name, value):
                 setattr(self, name, value)
                 params.append(getattr(self, name))
-
-            # add_attr(
-            #     f"{prefix}_alpha",
-            #     torch.nn.Parameter(
-            #         torch.full((lmm_layers,), fill_value=alpha_init_value)
-            #     ),
-            # )
 
             if ShiftStrategy.USE_VECTOR_IMPL in strategy:
                 add_attr(
@@ -209,13 +209,14 @@ class AttnFFNShift(BaseHookEncoder):
     def _shift_hook(self, prefix):
         def hook(m, inputs, outputs, module_name, **kwargs):
             layer_idx = int(re.findall(r"\d+", module_name)[0])
-            # alpha = getattr(self, f"{prefix}_alpha")
             lora_A = getattr(self, f"{prefix}_lora_A", None)
             lora_B = getattr(self, f"{prefix}_lora_B", None)
             shift = getattr(self, f"{prefix}_shift", None)
 
             if isinstance(outputs, tuple):
                 hidden_states, *rest = outputs
+            else:
+                hidden_states = outputs
 
             if lora_A is not None and lora_B is not None:
                 shift = (hidden_states @ lora_A[layer_idx]) @ lora_B[layer_idx]

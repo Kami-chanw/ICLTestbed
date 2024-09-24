@@ -1,5 +1,5 @@
 # dataset config
-num_query_samples = 1000
+num_query_samples = 300
 
 # training config
 alpha_lr = 5e-3
@@ -11,7 +11,7 @@ strategy = "deepspeed_stage_2_offload"  # "deepspeed_stage_2_offload" / "ddp"
 
 # data module config
 batch_size = 2
-accumulate_grad_batches = 8
+accumulate_grad_batches = 2
 num_shot = 32
 num_workers = 5
 grad_clip_val = 1.0
