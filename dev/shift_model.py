@@ -8,7 +8,8 @@ from deepspeed.ops.adam import DeepSpeedCPUAdam
 from transformers import get_cosine_schedule_with_warmup
 
 import exp_settings as setting
-from shift_encoder import AttnFFNShift, ShiftStrategy
+
+# from shift_encoder import AttnFFNShift, ShiftStrategy
 
 
 class Stratety(enum.IntFlag):
@@ -195,16 +196,6 @@ class ShiftModel(pl.LightningModule):
         hooks = self.shift_encoder.register_record_hooks(self.lmm)
 
         # step 1. prepare inputs
-        query_answer = [
-            query + pad_token + answer + eos_token
-            for query, answer in zip(query_texts, answers)
-        ]
-        query_images = [img[-setting.num_image_in_query :] for img in images]
-        query_inputs = self.lmm.process_input(query_answer, query_images).to(
-            self.device
-        )
-        query_inputs["attention_mask"] = query_inputs["input_ids"] != pad_token_id
-
         full_text = [
             ice + pad_token + query + pad_token + answer + eos_token
             for ice, query, answer in zip(ice_texts, query_texts, answers)
@@ -230,20 +221,24 @@ class ShiftModel(pl.LightningModule):
         loss_dict = {"loss": 0.0}
 
         # step 1. [SOS](implicitly added) + query + [PAD] + answer [EOS] forward process
-        if Stratety.LM_LOSS in self.strategy:
-            query_inputs["labels"] = query_inputs["input_ids"]
+        inputs["attention_mask"] = self.generate_label_mask(inputs, 1, keep_bos=True)
 
-        query_outputs = self.lmm.model(**query_inputs)
+        query_outputs = self.lmm.model(
+            **inputs,
+            labels=inputs["inputs_ids"] if Stratety.LM_LOSS in self.strategy else None,
+        )
         icv_logits = query_outputs["logits"]
 
         if Stratety.LM_LOSS in self.strategy:
             loss_dict["ce_loss"] = query_outputs["loss"]
             loss_dict["loss"] += setting.ce_loss_weight * query_outputs["loss"]
 
-        # hidden states need to be recorded only when layer-wise comparison is enabled
-        if self.strategy.has_layer_wise():
-            # extract query + answer + [EOS]
-            icv_hidden_states = self.get_hidden_states(query_inputs["attention_mask"])
+        # extract query + answer + [EOS]
+        icv_hidden_states = (
+            self.get_hidden_states(inputs["attention_mask"])
+            if self.strategy.has_layer_wise()
+            else None
+        )
 
         self.remove_hooks(hooks)
 
@@ -260,7 +255,7 @@ class ShiftModel(pl.LightningModule):
             logits_kl_loss = self.calculate_logits_kl_loss(
                 icv_logits,
                 ice_logits,
-                self.generate_label_mask(query_inputs, 1),
+                ice_label_mask,
                 ice_label_mask,
             )
             loss_dict.update(logits_kl_loss)
