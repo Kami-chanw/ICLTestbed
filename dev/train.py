@@ -25,17 +25,20 @@ from pytorch_lightning.utilities import rank_zero_only
 from pytorch_lightning.utilities.deepspeed import (
     convert_zero_checkpoint_to_fp32_state_dict,
 )
+import argparse
 
 os.environ["TOKENIZERS_PARALLELISM"] = "false"
 
+parser = argparse.ArgumentParser()
+parser.add_argument('--runname', type=str, required=True, help='Name of the run')
+args = parser.parse_args()
 
 def main():
     pl.seed_everything(426)
     os.makedirs(config.result_dir, exist_ok=True)
     wb_logger = WandbLogger(
         save_dir=config.result_dir,
-        name="attn-lora-mse",
-        # name="attn-shift-lm-logits-kl",
+        name=args.runname,
         project="VQAInContextVector",
         log_model=False,
     )
@@ -97,7 +100,7 @@ def convert_zero_ckpt_to_pth(save_path):
     checkpoint = torch.load(output_file)
     sd = checkpoint["state_dict"]
     sd = {n: pn for n, pn in sd.items() if not n.startswith("lmm")}
-    torch.save(sd, save_path / "attn-lora-mse.pth")
+    torch.save(sd, save_path / f"{args.runname}.pth")
     os.remove(output_file)
     shutil.rmtree(cpk_save_path)
 

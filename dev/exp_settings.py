@@ -1,5 +1,5 @@
 # dataset config
-num_query_samples = 300
+num_query_samples = 500
 
 # training config
 alpha_lr = 5e-3

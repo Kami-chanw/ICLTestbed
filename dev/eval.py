@@ -43,8 +43,12 @@ dataloader = prepare_dataloader(
 from transformers import BitsAndBytesConfig
 from testbed.models import Idefics
 from shift_encoder import AttnFFNShift, ShiftStrategy
+import argparse
+parser = argparse.ArgumentParser()
+parser.add_argument('--runname', type=str, required=True, help='Name of the run')
+args = parser.parse_args()
 
-sd = torch.load("../results/ckpt/attn-lora-mse.pth")
+sd = torch.load(f"../results/ckpt/{args.runname}.pth")
 sd = {
     k.removeprefix("shift_encoder."): v.squeeze()
     for k, v in sd.items()

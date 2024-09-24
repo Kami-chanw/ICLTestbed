@@ -8,7 +8,8 @@ from deepspeed.ops.adam import DeepSpeedCPUAdam
 from transformers import get_cosine_schedule_with_warmup
 
 import exp_settings as setting
-from shift_encoder import AttnFFNShift, ShiftStrategy
+
+# from shift_encoder import AttnFFNShift, ShiftStrategy
 
 
 class Stratety(enum.IntFlag):
@@ -164,7 +165,9 @@ class ShiftModel(pl.LightningModule):
                 torch.stack(
                     [
                         torch.mean(
-                            (1 - cos_sim(icv_hs, ice_hs).unsqueeze(-1))
+                            torch.clip(
+                                (1 - cos_sim(icv_hs, ice_hs).unsqueeze(-1)), 0, 1
+                            )
                             * loss_fn(icv_hs, ice_hs)
                         )
                         for icv_hs, ice_hs in zip(icv_hs_list, ice_hs_list)
