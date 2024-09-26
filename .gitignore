@@ -3,3 +3,4 @@
 dev/**
 results/**
 .vscode/**
+ICLTestbed.egg-info/**

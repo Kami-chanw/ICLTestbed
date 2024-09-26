@@ -67,6 +67,7 @@ class Idefics2(ModelBase):
 
     @property
     def default_prompt_template(self):
+        # adopt idefics1 prompt template, see https://arxiv.org/pdf/2306.16527
         # fmt: off
         template = (
             "{% if messages[0]['role'] == 'instruction' %}"
@@ -89,8 +90,14 @@ class Idefics2(ModelBase):
                         "{% elif line['type'] == 'image' %}"
                             "{{- '<image>' }}"
                         "{% endif %}"
+                        "{% if loop.last %}"
+                            "{% if message['role'] == 'answer' or message['role'] == 'caption' %}"
+                                "<end_of_utterance>\n"
+                            "{% else %}"
+                                " "
+                            "{%+ endif %}"
+                        "{% endif %}"
                     "{% endfor %}"
-                "<end_of_utterance>\n"
                 "{% endif %}"
             "{% endfor %}"
         )
