@@ -22,7 +22,8 @@ def prepare_vqa_input(
 ):
     """
     Prepares inputs for a Visual Question Answering (VQA) task by splitting a batch of question-answer pairs into
-    images, texts, and contexts for processing.
+    images, texts, and contexts for processing. Note that this method is especially designed for default prompt template.
+    If you customized prompt template, you should write your own prepare_*_input method.
 
     This function takes a batch of data containing question-answer pairs and splits it into separate components:
     - A list of images associated with each question.
@@ -60,15 +61,15 @@ def prepare_vqa_input(
         for qa in context[:-1]:
             messages.extend(
                 [
+                    {"role": "image", "content": [{"type": "image"}]},
                     {
                         "role": "question",
                         "content": [
-                            {"type": "image"},
                             {"type": "text", "text": qa[question_field]},
                         ],
                     },
                     {
-                        "role": "short answer",
+                        "role": "answer",
                         "content": [
                             {"type": "text", "text": qa[answer_field]},
                         ],
@@ -77,14 +78,14 @@ def prepare_vqa_input(
             )
         messages.extend(
             [
+                {"role": "image", "content": [{"type": "image"}]},
                 {
                     "role": "question",
                     "content": [
-                        {"type": "image"},
                         {"type": "text", "text": context[-1][question_field]},
                     ],
                 },
-                {"role": "short answer"},
+                {"role": "answer"},
             ]
         )
         batch_context.append(messages)
@@ -100,7 +101,8 @@ def prepare_caption_input(
 ):
     """
     Prepares the input data for a image captioning task by extracting images and formatting
-    contextual information with optional instructions.
+    contextual information with optional instructions.Note that this method is especially designed for default prompt template.
+    If you customized prompt template, you should write your own prepare_*_input method.
 
     Args:
         batch (`List[List[Dict[str, Any]]]`):
@@ -132,7 +134,7 @@ def prepare_caption_input(
             messages.extend(
                 [
                     {
-                        "role": "",
+                        "role": "image",
                         "content": [{"type": "image"}],
                     },
                     {
@@ -146,7 +148,7 @@ def prepare_caption_input(
         messages.extend(
             [
                 {
-                    "role": "",
+                    "role": "image",
                     "content": [{"type": "image"}],
                 },
                 {"role": "caption"},

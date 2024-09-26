@@ -50,6 +50,7 @@ class Idefics(ModelBase):
 
     @property
     def default_prompt_template(self):
+        # see https://arxiv.org/pdf/2306.16527
         # fmt: off
         return (
             "{% if messages[0]['role'] == 'instruction' %}"
@@ -72,8 +73,14 @@ class Idefics(ModelBase):
                         "{% elif line['type'] == 'image' %}"
                             "{{- '<image>' }}"
                         "{% endif %}"
+                        "{% if loop.last %}"
+                            "{% if message['role'] == 'answer' or message['role'] == 'caption' %}"
+                                "\n\n"
+                            "{% else %}"
+                                " "
+                            "{%+ endif %}"
+                        "{% endif %}"
                     "{% endfor %}"
-                "\n\n"
                 "{% endif %}"
             "{% endfor %}"
         )

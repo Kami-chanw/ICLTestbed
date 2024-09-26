@@ -1,0 +1,26 @@
+runname: "default"
+
+data:
+  num_query_samples: 500
+  name: "vqav2"
+  vqa_instruction: "Provide an answer to the question. Use the image to answer."
+  caption_instruction: ""
+  batch_size: 2
+  num_shot: 32
+  num_workers: 5
+  num_image_in_query: 1
+
+training:
+  alpha_lr: 5e-3
+  icv_lr: 5e-4
+  weight_decay: 1e-4
+  warmup_step: 0.1
+  ce_loss_weight: 0.5
+  strategy: "deepspeed_stage_2_offload"  # Options: "deepspeed_stage_2_offload" / "ddp"
+  accumulate_grad_batches: 2
+  grad_clip_val: 1.0
+
+generation_args:
+  num_beams: 3
+  max_new_tokens: 10
+  length_penalty: 0.0

@@ -20,25 +20,24 @@ import sys
 sys.path.insert(0, "..")
 import config
 from testbed.models import Idefics, Idefics2
-import exp_settings as setting
 from pytorch_lightning.utilities import rank_zero_only
 from pytorch_lightning.utilities.deepspeed import (
     convert_zero_checkpoint_to_fp32_state_dict,
 )
-import argparse
+
+import hydra
+from omegaconf import DictConfig
 
 os.environ["TOKENIZERS_PARALLELISM"] = "false"
 
-parser = argparse.ArgumentParser()
-parser.add_argument('--runname', type=str, required=True, help='Name of the run')
-args = parser.parse_args()
 
-def main():
+@hydra.main(config_path="config", config_name="exp_settings.yaml", version_base=None)
+def main(cfg: DictConfig):
     pl.seed_everything(426)
     os.makedirs(config.result_dir, exist_ok=True)
     wb_logger = WandbLogger(
         save_dir=config.result_dir,
-        name=args.runname,
+        name=cfg.runname,
         project="VQAInContextVector",
         log_model=False,
     )
@@ -53,11 +52,11 @@ def main():
         max_epochs=10,
         devices=len(os.environ["CUDA_VISIBLE_DEVICES"].split(",")),
         use_distributed_sampler=False,
-        strategy=setting.strategy,
+        strategy=cfg.training.strategy,
         precision="16-mixed",
-        gradient_clip_val=1.0,
+        gradient_clip_val=cfg.training.grad_clip_val,
         log_every_n_steps=10,
-        accumulate_grad_batches=setting.accumulate_grad_batches,
+        accumulate_grad_batches=cfg.training.accumulate_grad_batches,
         enable_checkpointing=False,
     )
     lmm = Idefics(
@@ -65,7 +64,7 @@ def main():
         torch_dtype=torch.float16,
     )
 
-    data_module = DataModule(lmm)
+    data_module = DataModule(cfg, lmm)
     shift_encoder = AttnFFNShift(
         4096,
         32,
@@ -73,9 +72,10 @@ def main():
         ffn_strategy=ShiftStrategy.RECORD_HIDDEN_STATES,
     )
     model = ShiftModel(
+        cfg,
         lmm,
         shift_encoder,
-        Stratety.LAYER_WISE_MSE,
+        Stratety.LAYER_WISE_KL_DIV_AFTER_LM_HEAD | Stratety.LM_LOSS,
     )
     trainer.fit(
         model,
@@ -86,12 +86,12 @@ def main():
         weights_only=True,
     )
 
-    if "deepspeed" in setting.strategy:
-        convert_zero_ckpt_to_pth(os.path.join(config.result_dir, "ckpt"))
+    if "deepspeed" in cfg.training.strategy:
+        convert_zero_ckpt_to_pth(cfg, os.path.join(config.result_dir, "ckpt"))
 
 
 @rank_zero_only
-def convert_zero_ckpt_to_pth(save_path):
+def convert_zero_ckpt_to_pth(cfg, save_path):
     save_path = Path(save_path)
     cpk_save_path = save_path / "last"
     output_file = save_path / "lightning_module.bin"
@@ -100,7 +100,7 @@ def convert_zero_ckpt_to_pth(save_path):
     checkpoint = torch.load(output_file)
     sd = checkpoint["state_dict"]
     sd = {n: pn for n, pn in sd.items() if not n.startswith("lmm")}
-    torch.save(sd, save_path / f"{args.runname}.pth")
+    torch.save(sd, save_path / f"{cfg.runname}.pth")
     os.remove(output_file)
     shutil.rmtree(cpk_save_path)
 
