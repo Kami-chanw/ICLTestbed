@@ -8,7 +8,7 @@
 # are sometimes constant, e.g. christmas -> christmas which was incorrectly
 # singularized by our inflection.singularize.
 import re
-from typing import List, Union
+from typing import List, Optional, Union
 import nltk
 from nltk.corpus.reader import VERB
 import inflection
@@ -206,7 +206,23 @@ class OKVQAStemmer:
         return " ".join(stemmed_words)
 
 
-def postprocess_generation(predictions: Union[str, List[str]]):
+def postprocess_generation(predictions: Union[str, List[str]], stop_words: Optional[List[str]] = None):
+    """
+    Post-processes generated predictions by applying text normalization techniques.
+
+    This function processes a single prediction or a list of predictions, allowing for optional truncation 
+    based on stop words. It returns the processed prediction(s) either as a string or a list, depending on the input type.
+
+    Args:
+        predictions (Union[str, List[str]]): The generated text prediction(s) to be processed.
+        stop_words (Optional[List[str]], *optional*): A list of stop words to truncate predictions. If provided, the 
+            prediction will be truncated at the first occurrence of any stop word.
+
+    Returns:
+        Union[str, List[str]]: The post-processed prediction(s). Returns a string if a single prediction is given, 
+        or a list if multiple predictions are provided.
+    """
+    
     is_batched = True
     if isinstance(predictions, str):
         predictions = [predictions]
@@ -216,8 +232,8 @@ def postprocess_generation(predictions: Union[str, List[str]]):
         postprocess_generation.stemmer = OKVQAStemmer()
 
     def process(pred):
-        pred = re.split("Question|Answer|Short", pred, 1)[0]
-        pred = re.split(", ", pred, 1)[0]
+        if stop_words is not None:
+            pred = re.split("|".join(stop_words), pred, 1)[0]
         return postprocess_generation.stemmer.stem(pred)
 
     result = [process(pred) for pred in predictions]

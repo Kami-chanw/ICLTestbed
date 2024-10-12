@@ -1,6 +1,5 @@
 from typing import Iterable, Iterator, List
 from torch.utils.data.sampler import Sampler, BatchSampler
-from testbed.data.sampler.similarity_sampler import SimilaritySampler
 
 
 class ConcatSampler(Sampler[List[int]]):

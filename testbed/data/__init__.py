@@ -10,7 +10,7 @@ from torch.utils.data import (
     Dataset,
     ConcatDataset,
 )
-from testbed.data.sampler import BatchSamplerWrapper, ConcatSampler
+from testbed.data.sampler import MergedBatchSampler, ConcatSampler
 
 
 def prepare_vqa_input(
@@ -162,7 +162,7 @@ def prepare_caption_input(
 def prepare_dataloader(
     datasets: Union[Dataset, List[Dataset]],
     batch_size: int,
-    num_shots: int,
+    num_shots: Optional[int] = None,
     num_per_dataset: Optional[Union[int, List[int]]] = None,
     collate_fn: Optional[Callable[[List[List[Any]]], Any]] = None,
     samplers: Optional[Union[Sampler, List[Sampler]]] = None,
@@ -181,8 +181,8 @@ def prepare_dataloader(
             A `Dataset` object or list of datasets to load data from.
         batch_size (`int`):
             Number of sub-lists (each with `num_shots + 1` items) per batch.
-        num_shots (`int`):
-            Total number of in-context examples per sub-list.
+        num_shots (`int`, *optional*):
+            Total number of in-context examples per sub-list. It can be None if `num_per_dataset` is specified.
         num_per_dataset (`int` or `List[int]`, *optional*):
             Number of items to sample from each dataset, whose sum should be equal `to num_shots` + 1.
             It can be `None` if only one dataset is provided.
@@ -236,7 +236,7 @@ def prepare_dataloader(
         else:
             raise ValueError(
                 f"Unable to get correct index from sampler {sampler}, "
-                "it should yield an `int` or `list` of `int` of length {minibatch_size}."
+                f"it should yield an `int` or `list` of `int` of length {minibatch_size}."
             )
 
     def collate_fn_wrapper(batch):
@@ -263,6 +263,17 @@ def prepare_dataloader(
 
     if not isinstance(datasets, list):
         datasets = [datasets]
+    if num_shots is None:
+        if num_per_dataset is not None:
+            num_shots = (
+                num_per_dataset - 1
+                if isinstance(num_per_dataset, int)
+                else sum(num_per_dataset) - 1
+            )
+        else:
+            raise ValueError(
+                "num_shot and num_per_dataset can't be None at the same time."
+            )
 
     num_per_dataset = check_consistent(
         "num_per_dataset", num_per_dataset, [num_shots + 1]
@@ -284,6 +295,6 @@ def prepare_dataloader(
     return DataLoader(
         concat_dataset,
         collate_fn=collate_fn_wrapper,
-        batch_sampler=BatchSamplerWrapper(concat_sampler, batch_size, drop_last),
+        batch_sampler=MergedBatchSampler(concat_sampler, batch_size, drop_last),
         **kwargs,
     )
