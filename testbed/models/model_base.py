@@ -41,6 +41,8 @@ class ModelBase(nn.Module):
             model_root, **model_args, **common_args
         )
 
+        self.config = self.model.config
+
         self.prompt_template = None
 
     def _try_inject_params(self, fn, **kwargs):
@@ -67,7 +69,7 @@ class ModelBase(nn.Module):
             >>> def hook_fn(module, input, output, module_name):
             >>>     print(f"Module name: {module_name}")
 
-            This wrapper will pass the `module_name` argument from `kwargs` to `fn`.
+            This method will pass the `module_name` argument from `kwargs` to `fn`.
         """
         signature = inspect.signature(fn)
         supports_kwargs = any(
@@ -89,12 +91,8 @@ class ModelBase(nn.Module):
         def module_dict():
             return {k: v for k, v in self.model.named_modules()}
 
-        use_regex = kwargs.pop("use_regex", False)
-        if use_regex:
-            if not isinstance(module_name_or_type, str):
-                raise ValueError("module_name_or_type must be string if use_regex=True")
-            import re
-
+        if isinstance(module_name_or_type, str):
+            # Use regex to match module names
             return [
                 getattr(module, register_fn_name)(
                     self._try_inject_params(hook, module_name=name), **kwargs
@@ -103,7 +101,17 @@ class ModelBase(nn.Module):
                 if re.search(module_name_or_type, name)
             ]
 
-        if isinstance(module_name_or_type, HookType):
+        elif isinstance(module_name_or_type, list):
+            # Exact match for each module name in the list
+            return [
+                getattr(module_dict()[name], register_fn_name)(
+                    self._try_inject_params(hook, module_name=name), **kwargs
+                )
+                for name in module_name_or_type
+                if name in module_dict()
+            ]
+
+        elif isinstance(module_name_or_type, HookType):
             raise ValueError(
                 f"{module_name_or_type.name} is unsupported or not implemented by {type(self).__name__}."
             )
@@ -115,33 +123,29 @@ class ModelBase(nn.Module):
     @overload
     def register_forward_hook(
         self,
-        module_name_or_type: Union[str, HookType],
+        module_name_or_type: Union[str, List[str], HookType],
         hook: Callable,
         *,
         prepend: bool = False,
         with_kwargs: bool = False,
         always_call: bool = False,
-        use_regex: bool = False,
     ) -> Union[RemovableHandle, List[RemovableHandle]]:
         """
         Register a forward hook on the module, see https://pytorch.org/docs/stable/generated/torch.nn.Module.html#torch.nn.Module.register_forward_hook
         for details. The hook will be called every time after forward() has computed an output.
 
         Args:
-            module_name_or_type (str or HookType):
-                If str, then call register_forward_hook for the module named.
+            module_name_or_type (str, List[str], or HookType):
+                If str, then call register_forward_hook for the module named using regex matching.
+                If List[str], then register_forward_hook is called for each named module using exact matching.
                 If HookType, then register_forward_hook is called for the module of the specified type. It should be implemented by derived classes.
             hook (Callable):
                 The user defined hook to be registered. The hook should have the following signature::
 
                     hook(module, args, output, module_name) -> None or modified output
-            use_regex (bool, defaults to False):
-                If True, `module_name_or_type` will be treated as a regex pattern to match multiple module.
-                Note that if use_regex is True, then pattern is not required to match a whole word,
-                otherwise module_name_or_type must be exactly the same as the module name.
 
         Returns:
-            `RemovableHandle`: a handle that can be used to remove the added hook by calling `handle.remove()`
+            `RemovableHandle` or `List[RemovableHandle]`: a handle or list of handles that can be used to remove the added hook by calling `handle.remove()`
         """
         ...
 
@@ -165,7 +169,6 @@ class ModelBase(nn.Module):
         prepend: bool = False,
         with_kwargs: bool = False,
         always_call: bool = False,
-        use_regex: bool = False,
     ):
         if callable(args[0]):
             return super().register_forward_hook(
@@ -178,48 +181,39 @@ class ModelBase(nn.Module):
                 prepend=prepend,
                 with_kwargs=with_kwargs,
                 always_call=always_call,
-                use_regex=use_regex,
             )
 
     @overload
     def register_forward_pre_hook(
         self,
-        module_name_or_type: Union[str, HookType],
+        module_name_or_type: Union[str, List[str], HookType],
         hook: Callable,
         *,
         prepend: bool = False,
         with_kwargs: bool = False,
-        use_regex: bool = False,
     ) -> Union[RemovableHandle, List[RemovableHandle]]:
         """
         Register a forward pre-hook on the module, see https://pytorch.org/docs/stable/generated/torch.nn.Module.html#torch.nn.Module.register_forward_pre_hook
         for details. The hook will be called every time before forward() is invoked.
 
         Args:
-            module_name_or_type (str or HookType):
-                If str, then call register_forward_pre_hook for the module named.
+            module_name_or_type (str, List[str], or HookType):
+                If str, then call register_forward_pre_hook for the module named using regex matching.
+                If List[str], then register_forward_pre_hook is called for each named module using exact matching.
                 If HookType, then register_forward_pre_hook is called for the module of the specified type. It should be implemented by derived classes.
             hook (Callable):
                 The user defined hook to be registered. The hook should have the following signature::
 
                     hook(module, args, module_name) -> None or modified output
-            use_regex (bool, defaults to False):
-                If True, `module_name_or_type` will be treated as a regex pattern to match multiple module.
-                Note that if use_regex is True, then pattern is not required to match a whole word,
-                otherwise module_name_or_type must be exactly the same as the module name.
 
         Returns:
-            `RemovableHandle`: a handle that can be used to remove the added hook by calling `handle.remove()`
+            `RemovableHandle` or `List[RemovableHandle]`: a handle or list of handles that can be used to remove the added hook by calling `handle.remove()`
         """
         ...
 
     @overload
     def register_forward_pre_hook(
-        self,
-        hook: Callable,
-        *,
-        prepend: bool = False,
-        with_kwargs: bool = False,
+        self, hook: Callable, *, prepend: bool = False, with_kwargs: bool = False
     ) -> RemovableHandle:
         """
         Register a forward pre-hook on this model forward, same as standard one.
@@ -227,11 +221,7 @@ class ModelBase(nn.Module):
         ...
 
     def register_forward_pre_hook(
-        self,
-        *args,
-        prepend: bool = False,
-        with_kwargs: bool = False,
-        use_regex: bool = False,
+        self, *args, prepend: bool = False, with_kwargs: bool = False
     ):
         if callable(args[0]):
             return super().register_forward_pre_hook(
@@ -243,47 +233,38 @@ class ModelBase(nn.Module):
                 *args,
                 prepend=prepend,
                 with_kwargs=with_kwargs,
-                use_regex=use_regex,
             )
 
     @overload
     def register_full_backward_hook(
         self,
-        module_name_or_type: Union[str, HookType],
+        module_name_or_type: Union[str, List[str], HookType],
         hook: Callable,
         *,
         prepend: bool = False,
-        use_regex: bool = False,
     ) -> Union[RemovableHandle, List[RemovableHandle]]:
         """
-        Register a full_backward hook on the module, see https://pytorch.org/docs/stable/generated/torch.nn.Module.html#torch.nn.Module.register_full_backward_hook
-        for details. The hook will be called every time the gradients with respect to a module are computed,
-        i.e. the hook will execute if and only if the gradients with respect to module outputs are computed.
+        Register a full backward hook on the module, see https://pytorch.org/docs/stable/generated/torch.nn.Module.html#torch.nn.Module.register_full_backward_hook
+        for details. The hook will be called every time the gradients with respect to a module are computed.
 
         Args:
-            module_name_or_type (str or HookType):
-                If str, then call register_full_backward_hook for the module named.
+            module_name_or_type (str, List[str], or HookType):
+                If str, then call register_full_backward_hook for the module named using regex matching.
+                If List[str], then register_full_backward_hook is called for each named module using exact matching.
                 If HookType, then register_full_backward_hook is called for the module of the specified type. It should be implemented by derived classes.
             hook (Callable):
                 The user defined hook to be registered. The hook should have the following signature::
 
-                    hook(module, grad_input, grad_output, module_name) -> tuple(Tensor) or None
-            use_regex (bool, defaults to False):
-                If True, `module_name_or_type` will be treated as a regex pattern to match multiple module.
-                Note that if use_regex is True, then pattern is not required to match a whole word,
-                otherwise module_name_or_type must be exactly the same as the module name.
+                    hook(module, grad_input, grad_output, module_name) -> None or modified output
 
         Returns:
-            `RemovableHandle`: a handle that can be used to remove the added hook by calling `handle.remove()`
+            `RemovableHandle` or `List[RemovableHandle]`: a handle or list of handles that can be used to remove the added hook by calling `handle.remove()`
         """
         ...
 
     @overload
     def register_full_backward_hook(
-        self,
-        hook: Callable,
-        *,
-        prepend: bool = False,
+        self, hook: Callable, *, prepend: bool = False
     ) -> RemovableHandle:
         """
         Register a full_backward hook on this model, same as standard one.
@@ -294,46 +275,38 @@ class ModelBase(nn.Module):
         self,
         *args,
         prepend: bool = False,
-        use_regex: bool = False,
     ):
         if callable(args[0]):
             return super().register_full_backward_hook(*args, prepend=prepend)
         elif len(args) >= 2 and callable(args[1]):
             return self._register_hook(
-                "register_full_backward_hook",
-                *args,
-                prepend=prepend,
-                use_regex=use_regex,
+                "register_full_backward_hook", *args, prepend=prepend
             )
 
     @overload
     def register_full_backward_pre_hook(
         self,
-        module_name_or_type: Union[str, HookType],
+        module_name_or_type: Union[str, List[str], HookType],
         hook: Callable,
         *,
         prepend: bool = False,
-        use_regex: bool = False,
     ) -> Union[RemovableHandle, List[RemovableHandle]]:
         """
-        Register a full_backward pre-hook on the module, see https://pytorch.org/docs/stable/generated/torch.nn.Module.html#torch.nn.Module.register_full_backward_pre_hook
-        for details. The hook will be called every time the gradients for the module are computed.
+        Register a full backward pre-hook on the module, see https://pytorch.org/docs/stable/generated/torch.nn.Module.html#torch.nn.Module.register_full_backward_pre_hook
+        for details. The hook will be called every time before the gradients with respect to a module are computed.
 
         Args:
-            module_name_or_type (str or HookType):
-                If str, then call register_full_backward_pre_hook for the module named.
+            module_name_or_type (str, List[str], or HookType):
+                If str, then call register_full_backward_pre_hook for the module named using regex matching.
+                If List[str], then register_full_backward_pre_hook is called for each named module using exact matching.
                 If HookType, then register_full_backward_pre_hook is called for the module of the specified type. It should be implemented by derived classes.
             hook (Callable):
                 The user defined hook to be registered. The hook should have the following signature::
 
-                    hook(module, grad_output, module_name) -> tuple[Tensor] or None
-            use_regex (bool, defaults to False):
-                If True, `module_name_or_type` will be treated as a regex pattern to match multiple module.
-                Note that if use_regex is True, then pattern is not required to match a whole word,
-                otherwise module_name_or_type must be exactly the same as the module name.
+                    hook(module, grad_output, module_name) -> None or modified output
 
         Returns:
-            `RemovableHandle`: a handle that can be used to remove the added hook by calling `handle.remove()`
+            `RemovableHandle` or `List[RemovableHandle]`: a handle or list of handles that can be used to remove the added hook by calling `handle.remove()`
         """
         ...
 
@@ -349,20 +322,12 @@ class ModelBase(nn.Module):
         """
         ...
 
-    def register_full_backward_pre_hook(
-        self,
-        *args,
-        prepend: bool = False,
-        use_regex: bool = False,
-    ):
+    def register_full_backward_pre_hook(self, *args, prepend: bool = False):
         if callable(args[0]):
             return super().register_full_backward_pre_hook(*args, prepend=prepend)
         elif len(args) >= 2 and callable(args[1]):
             return self._register_hook(
-                "register_full_backward_pre_hook",
-                *args,
-                prepend=prepend,
-                use_regex=use_regex,
+                "register_full_backward_pre_hook", *args, prepend=prepend
             )
 
     @property
@@ -473,25 +438,22 @@ class ModelBase(nn.Module):
     @overload
     def replace_module(
         self,
-        module_name_or_type: Union[str, nn.Module],
+        module_name_or_type: Union[str, List[str], nn.Module],
         new_module_cls: nn.Module,
         *,
-        use_regex: bool = True,
         strict: bool = True,
         **init_args,
     ):
         """
         Replace modules in the model by matching their names or types, using either regex
-        or exact string matching.
+        for string input or exact string matching for a list of strings.
 
         Args:
-            module_name_or_type (str or nn.Module):
-                Name or type of the module to be replaced.
+            module_name_or_type (str, List[str], or nn.Module):
+                Name(s) or type of the module to be replaced. If str, regex matching is used.
+                If List[str], exact string matching is performed.
             new_module_cls (nn.Module):
                 The new module class to replace the matched module(s).
-            use_regex (bool, defaults to True):
-                If True, uses regex for matching module names.
-                If False, uses exact string matching.
             strict (bool, defaults to True):
                 If True, checks that the new function's signature is compatible with the old method's signature.
                 If False, skips signature checking.
@@ -508,25 +470,22 @@ class ModelBase(nn.Module):
     @overload
     def replace_module(
         self,
-        module_name_or_type: Union[str, nn.Module],
+        module_name_or_type: Union[str, List[str], nn.Module],
         new_module_instances: Union[nn.Module, List[nn.Module]],
         *,
-        use_regex: bool = True,
         strict: bool = True,
     ):
         """
         Replace specific instances of modules in the model by matching their names or types.
-        If `module_name_or_type` is a string and `use_regex` is False, only one module will
-        be matched, and `new_module_instances` must be a single instance.
+        If `module_name_or_type` is a string, regex matching is used. If it is a list of strings,
+        exact string matching is performed.
 
         Args:
-            module_name_or_type (str or nn.Module):
-                Name or type of the module to be replaced.
+            module_name_or_type (str, List[str], or nn.Module):
+                Name(s) or type of the module to be replaced. If str, regex matching is used.
+                If List[str], exact string matching is performed.
             new_module_instances (Union[nn.Module, List[nn.Module]]):
                 New module instance(s) to replace the matched modules.
-            use_regex (bool, defaults to True):
-                If True, uses regex for matching module names.
-                If False, uses exact string matching.
             strict (bool, defaults to True):
                 If True, checks that the new function's signature is compatible with the old method's signature.
                 If False, skips signature checking.
@@ -540,26 +499,24 @@ class ModelBase(nn.Module):
 
     def replace_module(
         self,
-        module_name_or_type: Union[str, nn.Module],
+        module_name_or_type: Union[str, List[str], nn.Module],
         new_module_cls_or_instances: Union[nn.Module, List[nn.Module]],
         *,
-        use_regex: bool = True,
         strict: bool = True,
         **init_args,
     ):
         """
         Replace modules in the model based on names or types, with either new classes or specific instances.
-        Checks whether the `forward` method of the new module has compatible parameter names
-        with the original module's `forward` method.
+        Supports matching by regex when `module_name_or_type` is a string, or exact string matching when
+        it is a list of strings. It checks whether the `forward` method of the new module has compatible
+        parameter names with the original module's `forward` method.
 
         Args:
-            module_name_or_type (str or nn.Module):
-                Name or type of the module to be replaced.
+            module_name_or_type (str, List[str], or nn.Module):
+                Name(s) or type of the module to be replaced. If str, regex matching is used.
+                If List[str], exact string matching is performed.
             new_module_cls_or_instances (nn.Module or List[nn.Module]):
                 A new module class or instance(s) to replace the matched modules.
-            use_regex (bool, defaults to True):
-                If True, uses regex for matching module names.
-                If False, uses exact string matching.
             strict (bool, defaults to True):
                 If True, checks that the new function's signature is compatible with the old method's signature.
                 If False, skips signature checking.
@@ -571,12 +528,11 @@ class ModelBase(nn.Module):
                 If the number of matched modules does not match the number of new instances provided,
                 or if the new module's forward method has incompatible parameter names with the original module.
         """
-        matched_modules = []
 
-        def replace_module_by_name(name, original_module, new_module):
+        def replace_module_by_name(name, orig_module, new_module):
             if strict:
                 orig_params = list(
-                    inspect.signature(original_module.forward).parameters.keys()
+                    inspect.signature(orig_module.forward).parameters.keys()
                 )
                 new_params = list(
                     inspect.signature(new_module.forward).parameters.keys()
@@ -595,23 +551,36 @@ class ModelBase(nn.Module):
                 parent_module = getattr(parent_module, pname)
             setattr(parent_module, last_name, new_module)
 
-        for name, module in self.model.named_modules():
-            if isinstance(module_name_or_type, str):
-                if use_regex and re.search(module_name_or_type, name):
-                    matched_modules.append((name, module))
-                elif not use_regex and name == module_name_or_type:
-                    matched_modules.append((name, module))
-                    break
-            elif isinstance(module, module_name_or_type):
-                matched_modules.append((name, module))
+        if isinstance(module_name_or_type, str):
+            matched_modules = {
+                name: module
+                for name, module in self.model.named_modules()
+                if re.search(module_name_or_type, name)
+            }
+        elif isinstance(module_name_or_type, list):
+            matched_modules = {
+                name: module
+                for name, module in self.model.named_modules()
+                if name in module_name_or_type
+            }
+        elif isinstance(module_name_or_type, type):
+            matched_modules = {
+                name: module
+                for name, module in self.model.named_modules()
+                if isinstance(module, module_name_or_type)
+            }
+        else:
+            matched_modules = None
 
         if not matched_modules:
             raise ValueError(f"No modules found matching {module_name_or_type}")
 
         if isinstance(new_module_cls_or_instances, type):
-            for name, module in matched_modules:
-                new_module = new_module_cls_or_instances(**init_args)
-                replace_module_by_name(name, module, new_module)
+            # Create new instances using the provided class and replace the matched modules
+            for name, module in matched_modules.items():
+                replace_module_by_name(
+                    name, module, new_module_cls_or_instances(**init_args)
+                )
         else:
             if isinstance(new_module_cls_or_instances, list):
                 if len(matched_modules) != len(new_module_cls_or_instances):
@@ -619,7 +588,7 @@ class ModelBase(nn.Module):
                         f"Number of matched modules ({len(matched_modules)}) does not match the number of provided instances ({len(new_module_cls_or_instances)})."
                     )
                 for (name, module), new_instance in zip(
-                    matched_modules, new_module_cls_or_instances
+                    matched_modules.items(), new_module_cls_or_instances
                 ):
                     replace_module_by_name(name, module, new_instance)
             else:
@@ -628,18 +597,17 @@ class ModelBase(nn.Module):
                         "When replacing with a single instance, only one module should be matched."
                     )
                 replace_module_by_name(
-                    matched_modules[0][0],
-                    matched_modules[0][1],
+                    next(iter(matched_modules)),
+                    matched_modules[next(iter(matched_modules))],
                     new_module_cls_or_instances,
                 )
 
     def replace_module_method(
         self,
-        module_name_or_type: Union[str, nn.Module],
+        module_name_or_type: Union[str, List[str], nn.Module],
         method_name: str,
         new_method: Callable,
         *,
-        use_regex: bool = True,
         strict: bool = True,
     ):
         """
@@ -648,45 +616,58 @@ class ModelBase(nn.Module):
         The new function will have `module_name` and `old_method` injected as keyword arguments, if possible.
 
         Args:
-            module_name_or_type (str or nn.Module):
-                Name or type of the module whose method is to be replaced.
+            module_name_or_type (str, List[str], or nn.Module):
+                Name(s) or type of the module whose method is to be replaced. If str, regex matching is used. 
+                If List[str], exact string matching is performed.
             method_name (str):
                 The name of the method to replace (e.g., 'forward').
-            new_fn (Callable):
+            new_method (Callable):
                 A new function to replace the matched method.
-            use_regex (bool, defaults to True):
-                If True, uses regex for matching module names. If False, uses exact string matching.
             strict (bool, defaults to True):
                 If True, checks that the new function's signature is compatible with the old method's signature.
                 If False, skips signature checking.
 
         Raises:
-            ValueError: If no module matches the given name or type, or if the new method's signature is incompatible with the old method's signature when strict is True.
+            ValueError:
+                If no module matches the given name or type, or if the new method's signature is incompatible 
+                with the old method's signature when strict is True.
         """
-        matched_modules = []
-
-        for name, module in self.model.named_modules():
-            if isinstance(module_name_or_type, str):
-                if use_regex and re.search(module_name_or_type, name):
-                    matched_modules.append((name, module))
-                elif not use_regex and name == module_name_or_type:
-                    matched_modules.append((name, module))
-                    break
-            elif isinstance(module, module_name_or_type):
-                matched_modules.append((name, module))
+        if isinstance(module_name_or_type, str):
+            matched_modules = {
+                name: module
+                for name, module in self.model.named_modules()
+                if re.search(module_name_or_type, name)
+            }
+        elif isinstance(module_name_or_type, list):
+            matched_modules = {
+                name: module
+                for name, module in self.model.named_modules()
+                if name in module_name_or_type
+            }
+        elif isinstance(module_name_or_type, type):
+            matched_modules = {
+                name: module
+                for name, module in self.model.named_modules()
+                if isinstance(module, module_name_or_type)
+            }
+        else:
+            matched_modules = None
 
         if not matched_modules:
             raise ValueError(f"No modules found matching {module_name_or_type}")
 
-        for name, module in matched_modules:
+        for name, module in matched_modules.items():
             old_method = getattr(module, method_name, None)
             if old_method is None:
                 raise ValueError(f"Module '{name}' has no method '{method_name}'")
+
             if strict:
                 orig_params = list(inspect.signature(old_method).parameters.keys())
                 new_params = list(inspect.signature(new_method).parameters.keys())
+
                 if "self" not in orig_params and isinstance(old_method, MethodType):
                     orig_params.insert(0, "self")
+
                 if orig_params != new_params[: len(orig_params)]:
                     raise ValueError(
                         f"The first few parameters of the new function do not match "
@@ -703,3 +684,4 @@ class ModelBase(nn.Module):
                     module,
                 ),
             )
+

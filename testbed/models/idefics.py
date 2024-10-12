@@ -41,11 +41,7 @@ class Idefics(ModelBase):
             module_name_or_type = r"model\." + pattern_prefix + r"layers\.\d+$"
 
         return super()._register_hook(
-            register_fn_name,
-            module_name_or_type,
-            hook,
-            use_regex=kwargs.pop("use_regex", False) or pattern_prefix is not None,
-            **kwargs,
+            register_fn_name, module_name_or_type, hook, **kwargs
         )
 
     @property

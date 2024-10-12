@@ -47,48 +47,47 @@ class ConcatSampler(Sampler[List[int]]):
         return min(len(sampler) for sampler in self.samplers)
 
 
-class BatchSamplerWrapper(Sampler):
+class MergedBatchSampler(BatchSampler):
     """
-    Wraps another BatchSampler to yield a bigger batch of indices.
+    Repeat sampling from BatchSampler multiple times to yield a larger, merged batch of indices.
 
-    This sampler is designed to take an existing `BatchSampler` and yield larger batches by grouping
+    This sampler is designed to take an existing `BatchSampler` and yield larger batches by merging
     smaller batches together. It is particularly useful when you need to create batches that are larger
     than what the underlying `BatchSampler` would normally yield.
 
     Args:
-        batch_sampler (`BatchSampler`):
+        sampler (`BatchSampler`):
             The original batch sampler that yields smaller batches of indices.
-        batch_size (`int`):
-            The desired batch size for the wrapped sampler.
+        merge_size (`int`):
+            The number of smaller batches to merge together.
         drop_last (`bool`):
-            If `True`, drop the last incomplete batch; if `False`, return it.
+            If `True`, drop the last incomplete merged batch; if `False`, return it.
     """
 
-    def __init__(
-        self, batch_sampler: BatchSampler, batch_size: int, drop_last: bool
-    ) -> None:
+    def __init__(self, sampler: BatchSampler, merge_size: int, drop_last: bool) -> None:
         # Since collections.abc.Iterable does not check for `__getitem__`, which
         # is one way for an object to be an iterable, we don't do an `isinstance`
         # check here.
         if (
-            not isinstance(batch_size, int)
-            or isinstance(batch_size, bool)
-            or batch_size <= 0
+            not isinstance(merge_size, int)
+            or isinstance(merge_size, bool)
+            or merge_size <= 0
         ):
             raise ValueError(
-                "batch_size should be a positive integer value, "
-                "but got batch_size={}".format(batch_size)
+                "merge_size should be a positive integer value, "
+                "but got merge_size={}".format(merge_size)
             )
         if not isinstance(drop_last, bool):
             raise ValueError(
                 "drop_last should be a boolean value, but got "
                 "drop_last={}".format(drop_last)
             )
-        if isinstance(next(iter(batch_sampler)), int):
+        if isinstance(next(iter(sampler)), int):
             raise ValueError("batch_sampler should yield a list of int.")
 
-        self.sampler = batch_sampler
-        self.batch_size = batch_size * batch_sampler.batch_size
+        self.sampler = sampler
+        self.batch_size = merge_size * sampler.batch_size
+        self.merge_size = merge_size
         self.drop_last = drop_last
 
     def __iter__(self) -> Iterator[List[int]]:
@@ -97,11 +96,8 @@ class BatchSamplerWrapper(Sampler):
             sampler_iter = iter(self.sampler)
             while True:
                 try:
-                    batch = [
-                        next(sampler_iter)
-                        for _ in range(self.batch_size // self.sampler.batch_size)
-                    ]
-                    # flatten
+                    batch = [next(sampler_iter) for _ in range(self.merge_size)]
+                    # flatten the merged batches
                     yield [idx for mini in batch for idx in mini]
                 except StopIteration:
                     break
@@ -125,6 +121,6 @@ class BatchSamplerWrapper(Sampler):
         # implementation below.
         # Somewhat related: see NOTE [ Lack of Default `__len__` in Python Abstract Base Classes ]
         if self.drop_last:
-            return len(self.sampler) // self.batch_size  # type: ignore[arg-type]
+            return len(self.sampler) // self.merge_size  # type: ignore[arg-type]
         else:
-            return (len(self.sampler) + self.batch_size - 1) // self.batch_size  # type: ignore[arg-type]
+            return (len(self.sampler) + self.merge_size - 1) // self.merge_size  # type: ignore[arg-type]
