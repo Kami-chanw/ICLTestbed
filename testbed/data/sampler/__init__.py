@@ -47,7 +47,7 @@ class ConcatSampler(Sampler[List[int]]):
         return min(len(sampler) for sampler in self.samplers)
 
 
-class MergedBatchSampler(BatchSampler):
+class MultiBatchSampler(BatchSampler):
     """
     Repeat sampling from BatchSampler multiple times to yield a larger, merged batch of indices.
 

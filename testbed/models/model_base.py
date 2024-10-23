@@ -5,7 +5,6 @@ import re
 from types import MethodType
 from typing import Any, Callable, Dict, List, Optional, Union, overload
 
-
 import torch
 from torch.utils.hooks import RemovableHandle
 import torch.nn as nn
@@ -40,6 +39,9 @@ class ModelBase(nn.Module):
         self.model = model_class.from_pretrained(
             model_root, **model_args, **common_args
         )
+
+        if not hasattr(self, "_model_name"):
+            self._model_name = None
 
         self.config = self.model.config
 
@@ -332,11 +334,13 @@ class ModelBase(nn.Module):
 
     @property
     def default_prompt_template(self) -> str:
-        raise NotImplementedError
+        raise NotImplementedError()
 
     @property
     def model_name(self) -> str:
-        raise NotImplementedError
+        if self._model_name:
+            return self._model_name
+        raise NotImplementedError()
 
     @property
     def device(self):
@@ -539,10 +543,14 @@ class ModelBase(nn.Module):
                 )
 
                 if orig_params != new_params[: len(orig_params)]:
+                    missing_params = set(orig_params) - set(new_params[: len(orig_params)])
+                    unexpected_params =  set(new_params[: len(orig_params)]) - set(orig_params)
                     raise ValueError(
                         "The first few parameters of the new module's forward method do not match "
-                        "the original module's. If you want to add new parameters, they should be "
-                        "at the end of the parameter list."
+                        "the original module's, which may lead unexpected behaviors."
+                        f"{', '.join(missing_params)} are missing, {', '.join(unexpected_params)} are unexpected."
+                        "If you want to add new parameters, they should be at the end of the parameter list,"
+                        "or set strict=False to avoid this error."
                     )
 
             *parent_module_names, last_name = name.split(".")
@@ -576,7 +584,6 @@ class ModelBase(nn.Module):
             raise ValueError(f"No modules found matching {module_name_or_type}")
 
         if isinstance(new_module_cls_or_instances, type):
-            # Create new instances using the provided class and replace the matched modules
             for name, module in matched_modules.items():
                 replace_module_by_name(
                     name, module, new_module_cls_or_instances(**init_args)
@@ -669,9 +676,14 @@ class ModelBase(nn.Module):
                     orig_params.insert(0, "self")
 
                 if orig_params != new_params[: len(orig_params)]:
+                    missing_params = set(orig_params) - set(new_params[: len(orig_params)])
+                    unexpected_params =  set(new_params[: len(orig_params)]) - set(orig_params)
                     raise ValueError(
-                        f"The first few parameters of the new function do not match "
-                        f"the original method '{method_name}' of module '{name}'."
+                        "The first few parameters of the new function do not match "
+                        f"the original method '{method_name}' of module '{name}', which may lead unexpected behaviors."
+                        f"{', '.join(missing_params)} are missing, {', '.join(unexpected_params)} are unexpected."
+                        "If you want to add new parameters, they should be at the end of the parameter list,"
+                        "or set strict=False to avoid this error."
                     )
 
             setattr(

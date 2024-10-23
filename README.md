@@ -41,7 +41,7 @@ If you want to customize new datasets, models, or metrics, you can follow the su
     <tr>
       <td rowspan="2" style="vertical-align: middle;">Visual Question Answering</td>
       <td>VQA v2</td>
-      <td rowspan="3" style="vertical-align: middle;">Idefics <br> Idefics2</td>
+      <td rowspan="4" style="vertical-align: middle;">Idefics <br> Idefics2</td>
       <td rowspan="2">vqa accuracy</td>
     </tr>
     <tr>
@@ -51,6 +51,17 @@ If you want to customize new datasets, models, or metrics, you can follow the su
       <td style="vertical-align: middle;">Image Captioning</td>
       <td>COCO (Karpathy split)</td>
       <td>CIDEr</td>
+    </tr>
+    <tr>
+      <td style="vertical-align: middle;">Visual Reasoning</td>
+      <td>Hateful memes</td>
+      <td>AUC ROC</td>
+    </tr>
+    <tr>
+      <td style="vertical-align: middle;">NLP</td>
+      <td>-</td>
+      <td>Mistral</td>
+      <td>-</td>
     </tr>
   </tbody>
 </table>

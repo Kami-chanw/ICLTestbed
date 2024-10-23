@@ -1,26 +1,41 @@
 import os
 import re
-from typing import Any, Dict, List, Union
 import warnings
+from typing import Any, Dict, List, Union
 from PIL.Image import Image
 from transformers import (
-    IdeficsForVisionText2Text,
+    AutoModelForVision2Seq,
     AutoProcessor,
 )
 
 from testbed.models.model_base import HookType, ModelBase
 
 
-class Idefics(ModelBase):
+class Idefics2(ModelBase):
     def __init__(
         self,
         model_root,
         processor_class=AutoProcessor,
-        model_class=IdeficsForVisionText2Text,
+        model_class=AutoModelForVision2Seq,
         processor_args=None,
         model_args=None,
         **common_args,
     ):
+        self._model_name = os.path.basename(model_root).lower()
+        if not re.fullmatch(r"^mistral-\d+b[a-zA-Z0-9-]*$", self._model_name):
+            warnings.warn(
+                "The model type cannot be detected automatically in `model_root`, which may lead to unexpected behaviors."
+            )
+            self._model_name = None
+
+        processor_args = (
+            processor_args
+            if processor_args
+            else dict(
+                chat_template=self.default_prompt_template, do_image_splitting=False
+            )
+        )
+
         super().__init__(
             model_root=model_root,
             processor_class=processor_class,
@@ -30,21 +45,14 @@ class Idefics(ModelBase):
             **common_args,
         )
 
-        self._model_name = os.path.basename(model_root).lower()
-        if not re.fullmatch(r"^idefics-\d+b[a-zA-Z-]*$", self._model_name):
-            warnings.warn(
-                "The model type cannot be detected automatically in `model_root`, which may lead to unexpected behaviors."
-            )
-            self._model_name = None
-
     def _register_hook(self, register_fn_name, module_name_or_type, hook, **kwargs):
         pattern_prefix = None
         if module_name_or_type == HookType.TEXT_MODEL_LAYER:
-            pattern_prefix = ""
+            pattern_prefix = r"text_model\."
         elif module_name_or_type == HookType.VISION_MODEL_LAYER:
             pattern_prefix = r"vision_model\.encoder\."
         if pattern_prefix is not None:
-            module_name_or_type = r"model\." + pattern_prefix + r"layers\.\d+$"
+            module_name_or_type = pattern_prefix + r"layers\.\d+$"
 
         return super()._register_hook(
             register_fn_name, module_name_or_type, hook, **kwargs
@@ -52,9 +60,9 @@ class Idefics(ModelBase):
 
     @property
     def default_prompt_template(self):
-        # see https://arxiv.org/pdf/2306.16527
+        # adopt idefics1 prompt template, see https://arxiv.org/pdf/2306.16527
         # fmt: off
-        return (
+        template = (
             "{% if messages[0]['role'] == 'instruction' %}"
                 "Instruction: {{ messages[0]['content'] }}\n"
                 "{% set messages = messages[1:] %}"
@@ -77,7 +85,7 @@ class Idefics(ModelBase):
                         "{% endif %}"
                         "{% if loop.last %}"
                             "{% if message['role'] == 'answer' or message['role'] == 'caption' %}"
-                                "\n\n"
+                                "<end_of_utterance>\n"
                             "{% else %}"
                                 " "
                             "{%+ endif %}"
@@ -87,6 +95,10 @@ class Idefics(ModelBase):
             "{% endfor %}"
         )
         # fmt: on
+        if self.model_name == self.BASE_MODEL_NAME:
+            # base model doesn't have <end_of_utterance> token
+            return template.replace("<end_of_utterance>", "\n")
+        return template
 
     def process_input(
         self,
@@ -134,22 +146,10 @@ class Idefics(ModelBase):
             isinstance(texts[0], list) and isinstance(texts[0][0], dict)
         ):
             texts = self.apply_prompt_template(texts, prompt_template=prompt_template)
-        inputs = []
-        for i, (text, image_list) in enumerate(zip(texts, images)):
-            text = text.split("<image>")
-            result = []
-            if len(text) - 1 != len(image_list):
-                raise ValueError(
-                    f"In the {i}-th input, the number of images {len(image_list)} does not match the number of image tokens {len(text) - 1} in the text."
-                )
-            for seg, image in zip(text, image_list):
-                if seg != "":
-                    result.append(seg)
-                result.append(image)
-            if text[-1] != "":  # the last question without answer
-                result.append(text[-1])
-            inputs.append(result)
-
         return self.processor(
-            prompts=inputs, padding=padding, return_tensors=return_tensors, **kwargs
+            text=texts,
+            images=images,
+            padding=padding,
+            return_tensors=return_tensors,
+            **kwargs,
         )

@@ -97,8 +97,7 @@ class COCOConfig(datasets.BuilderConfig):
         super().__init__(**kwargs)
 
 
-class COCODataset(datasets.GeneratorBasedBuilder):
-
+class COCO(datasets.GeneratorBasedBuilder):
     VERSION = datasets.Version("1.0.0")
     BUILDER_CONFIG_CLASS = COCOConfig
 

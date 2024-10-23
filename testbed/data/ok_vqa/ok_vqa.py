@@ -84,7 +84,7 @@ class OKVQAConfig(datasets.BuilderConfig):
         super().__init__(**kwargs)
 
 
-class OKVQADataset(datasets.GeneratorBasedBuilder):
+class OKVQA(datasets.GeneratorBasedBuilder):
 
     VERSION = datasets.Version("1.0.0")
 

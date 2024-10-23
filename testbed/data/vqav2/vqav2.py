@@ -73,7 +73,7 @@ class VQAv2Config(datasets.BuilderConfig):
         super().__init__(**kwargs)
 
 
-class VQAv2Dataset(datasets.GeneratorBasedBuilder):
+class VQAv2(datasets.GeneratorBasedBuilder):
 
     VERSION = datasets.Version("1.0.0")
 

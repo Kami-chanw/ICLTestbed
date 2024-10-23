@@ -1,32 +1,28 @@
+import os
+import re
 import warnings
 from typing import Any, Dict, List, Union
 from PIL.Image import Image
 from transformers import (
-    Idefics2ForConditionalGeneration,
-    Idefics2Processor,
+    AutoModelForVision2Seq,
+    AutoProcessor,
 )
 
 from testbed.models.model_base import HookType, ModelBase
 
 
 class Idefics2(ModelBase):
-    BASE_MODEL_NAME = "idefics2-8b-base"
-    FINE_TUNED_MODEL_NAME = "idefics2-8b"
-
     def __init__(
         self,
         model_root,
-        processor_class=Idefics2Processor,
-        model_class=Idefics2ForConditionalGeneration,
+        processor_class=AutoProcessor,
+        model_class=AutoModelForVision2Seq,
         processor_args=None,
         model_args=None,
         **common_args,
     ):
-        if self.BASE_MODEL_NAME in model_root:
-            self._model_name = self.BASE_MODEL_NAME
-        elif self.FINE_TUNED_MODEL_NAME in model_root:
-            self._model_name = self.FINE_TUNED_MODEL_NAME
-        else:
+        self._model_name = os.path.basename(model_root).lower()
+        if not re.fullmatch(r"^idefics2-\d+b[a-zA-Z-]*$", self._model_name):
             warnings.warn(
                 "The model type cannot be detected automatically in `model_root`, which may lead to unexpected behaviors."
             )
@@ -48,10 +44,6 @@ class Idefics2(ModelBase):
             model_args=model_args,
             **common_args,
         )
-
-    @property
-    def model_name(self):
-        return self._model_name
 
     def _register_hook(self, register_fn_name, module_name_or_type, hook, **kwargs):
         pattern_prefix = None
@@ -103,7 +95,7 @@ class Idefics2(ModelBase):
             "{% endfor %}"
         )
         # fmt: on
-        if self.model_name == self.BASE_MODEL_NAME:
+        if "base" in self._model_name:
             # base model doesn't have <end_of_utterance> token
             return template.replace("<end_of_utterance>", "\n")
         return template

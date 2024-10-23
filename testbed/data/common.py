@@ -1,5 +1,5 @@
 from pathlib import Path
-from typing import Callable, Dict
+from typing import Callable, Dict, List, Union
 import warnings
 import datasets
 
@@ -11,7 +11,7 @@ def most_common_from_dict(dct):
 
 def split_generators(
     expand_path_fn: Callable[[str, str], Path],
-    type_split_file_dict: Dict[str, Dict[str, str]],
+    type_split_file_dict: Dict[str, Dict[str, Union[str, List[str]]]],
     verbose: bool = True,
 ):
     """
@@ -20,11 +20,11 @@ def split_generators(
     then pass split and file type into the `generate_examples` method as parameters `split` and `{file_type}_path` respectively.
 
     Args:
-        expand_path_fn (`Callable[[str, str], Path]`): 
+        expand_path_fn (`Callable[[str, str], Union[Path, List[Path]]]`): 
             A method requires `file_type` and `split_name` as input and returns a `pathlib.Path` object \
-            pointing to the full path of `file_type` (e.g. questions, annotations and images).
-        type_split_file_dict (`Dict[str, Dict[str, str]]`):
-            A multi dict that contains file type -> split name -> file name.
+            or a list of `pathlib.Path` object pointing to the full path of `file_type` (e.g. questions, annotations and images).
+        type_split_file_dict (`Dict[str, Dict[str, Union[str, List[str]]]]`):
+            A multi dict that contains file type -> split name -> file name(s).
         verbose (`bool`, defaults to `True`):
             Whether to warn if a split files are not exist.
     
@@ -54,14 +54,18 @@ def split_generators(
 
     for split_name, dct in data_path.items():
         for path in dct.values():
-            if not path.exists():
-                missing_files.append(str(path))
-                splits.remove(split_name)
-                if verbose:
-                    warnings.warn(
-                        f"{str(path)} is not exists. The {split_name} split will not be loaded."
-                    )
-                break
+            if not isinstance(path, list):
+                path = [path]
+            for p in path:
+                if not p.exists():
+                    missing_files.append(str(p))
+                    splits.remove(split_name)
+                    if verbose:
+                        warnings.warn(
+                            f"{str(p)} is not exists. The {split_name} split will not be loaded."
+                            "You can suppress this warning by set verbose to False when loading dataset."
+                        )
+                    break
 
     if len(splits) == 0:
         raise FileNotFoundError(

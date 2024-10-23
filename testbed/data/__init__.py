@@ -1,5 +1,3 @@
-from ast import Tuple
-from random import shuffle
 from typing import Any, Callable, Dict, List, Optional, Union
 from torch.utils.data import (
     Sampler,
@@ -10,7 +8,44 @@ from torch.utils.data import (
     Dataset,
     ConcatDataset,
 )
-from testbed.data.sampler import MergedBatchSampler, ConcatSampler
+from testbed.data.sampler import MultiBatchSampler, ConcatSampler
+
+
+def prepare_input(
+    batch: List[List[Dict[str, Any]]],
+    retriever: Callable[[Any, bool], List[Dict]],
+    instruction: Optional[str] = None,
+):
+    """
+    Prepares a batch of input data for various tasks such as visual question answering (VQA)
+    or image captioning by formatting the context and optionally adding an instruction.
+
+    Args:
+        batch (List[List[Dict[str, Any]]]):
+            A batch of data where each element is a list of dictionaries,
+            representing a context (for example, previous questions/answers or captions).
+        retriever (Callable[[Any, bool], List[Dict]]):
+            A function that takes an item and a boolean flag `is_last` (indicating if the item is the last in the context)
+            and returns a list of dictionaries representing the formatted context.
+        instruction (Optional[str], optional):
+            An optional instruction to prepend to the context. Defaults to None.
+
+    Returns:
+        List[List[Dict[str, Any]]]: A list of formatted contexts, where each context includes the messages retrieved
+        by the retriever function, optionally preceded by the instruction.
+    """
+    batch_context = []
+    for context in batch:
+        messages = []
+        if instruction is not None:
+            messages.append({"role": "instruction", "content": instruction})
+
+        for item in context:
+            messages.extend(retriever(item, item == context[-1]))
+
+        batch_context.append(messages)
+
+    return batch_context
 
 
 def prepare_vqa_input(
@@ -51,46 +86,26 @@ def prepare_vqa_input(
             is `[batch_size, num_shots + 1]`.
     """
 
-    batch_images, batch_context = [], []
-    for context in batch:
-        batch_images.append([qa[image_field] for qa in context])
-        messages = []
-        if instruction is not None:
-            messages.append({"role": "instruction", "content": instruction})
+    def retriever(item: Dict[str, Any], is_last: bool):
+        return [
+            {"role": "image", "content": [{"type": "image"}]},
+            {
+                "role": "question",
+                "content": [{"type": "text", "text": item[question_field]}],
+            },
+            (
+                {"role": "answer"}
+                if is_last
+                else {
+                    "role": "answer",
+                    "content": [{"type": "text", "text": item[answer_field]}],
+                }
+            ),
+        ]
 
-        for qa in context[:-1]:
-            messages.extend(
-                [
-                    {"role": "image", "content": [{"type": "image"}]},
-                    {
-                        "role": "question",
-                        "content": [
-                            {"type": "text", "text": qa[question_field]},
-                        ],
-                    },
-                    {
-                        "role": "answer",
-                        "content": [
-                            {"type": "text", "text": qa[answer_field]},
-                        ],
-                    },
-                ]
-            )
-        messages.extend(
-            [
-                {"role": "image", "content": [{"type": "image"}]},
-                {
-                    "role": "question",
-                    "content": [
-                        {"type": "text", "text": context[-1][question_field]},
-                    ],
-                },
-                {"role": "answer"},
-            ]
-        )
-        batch_context.append(messages)
-
-    return batch_context, batch_images
+    return prepare_input(batch, retriever, instruction), [
+        [qa[image_field] for qa in context] for context in batch
+    ]
 
 
 def prepare_caption_input(
@@ -123,40 +138,24 @@ def prepare_caption_input(
         - A list of lists, where each inner list contains the images for a batch. The shape of this list
             is `[batch_size, num_shots + 1]`.
     """
-    batch_images, batch_context = [], []
-    for context in batch:
-        batch_images.append([item[image_field] for item in context])
-        messages = []
-        if instruction is not None:
-            messages.append({"role": "instruction", "content": instruction})
 
-        for item in context[:-1]:
-            messages.extend(
-                [
-                    {
-                        "role": "image",
-                        "content": [{"type": "image"}],
-                    },
-                    {
-                        "role": "caption",
-                        "content": [
-                            {"type": "text", "text": item[caption_field]},
-                        ],
-                    },
-                ]
-            )
-        messages.extend(
-            [
-                {
-                    "role": "image",
-                    "content": [{"type": "image"}],
-                },
-                {"role": "caption"},
-            ]
-        )
-        batch_context.append(messages)
+    def retriever(item: Dict[str, Any], is_last: bool):
+        return [
+            {"role": "image", "content": [{"type": "image"}]},
+            {"role": "caption"},
+            (
+                {"role": "caption"}
+                if is_last
+                else {
+                    "role": "caption",
+                    "content": [{"type": "text", "text": item[caption_field]}],
+                }
+            ),
+        ]
 
-    return batch_context, batch_images
+    return prepare_input(batch, retriever, instruction), [
+        [item[image_field] for item in context] for context in batch
+    ]
 
 
 def prepare_dataloader(
@@ -212,7 +211,7 @@ def prepare_dataloader(
         [[0, 5, 6], [1, 7, 8]]
     """
     # extract options tht mutually exclusive with batch_sampler
-    drop_last = kwargs.pop("drop_last", True)
+    drop_last = kwargs.pop("drop_last", False)
     shuffle = kwargs.pop("shuffle", False)
     sampler = kwargs.pop("sampler", None)
     if not sampler is None:
@@ -226,7 +225,7 @@ def prepare_dataloader(
             sampler = RandomSampler(dataset) if shuffle else SequentialSampler(dataset)
         sample_idx = next(iter(sampler))
         if isinstance(sample_idx, int):
-            return BatchSampler(sampler, minibatch_size, drop_last)
+            return BatchSampler(sampler, minibatch_size, True)
         elif (
             isinstance(sample_idx, list)
             and all(isinstance(idx, int) for idx in sample_idx)
@@ -295,6 +294,6 @@ def prepare_dataloader(
     return DataLoader(
         concat_dataset,
         collate_fn=collate_fn_wrapper,
-        batch_sampler=MergedBatchSampler(concat_sampler, batch_size, drop_last),
+        batch_sampler=MultiBatchSampler(concat_sampler, batch_size, drop_last),
         **kwargs,
     )
