@@ -58,24 +58,24 @@ class MultiBatchSampler(BatchSampler):
     Args:
         sampler (`BatchSampler`):
             The original batch sampler that yields smaller batches of indices.
-        merge_size (`int`):
-            The number of smaller batches to merge together.
+        multi_batch_size (`int`):
+            The number of smaller batches to concatenate together.
         drop_last (`bool`):
             If `True`, drop the last incomplete merged batch; if `False`, return it.
     """
 
-    def __init__(self, sampler: BatchSampler, merge_size: int, drop_last: bool) -> None:
+    def __init__(self, sampler: BatchSampler, multi_merge_size: int, drop_last: bool) -> None:
         # Since collections.abc.Iterable does not check for `__getitem__`, which
         # is one way for an object to be an iterable, we don't do an `isinstance`
         # check here.
         if (
-            not isinstance(merge_size, int)
-            or isinstance(merge_size, bool)
-            or merge_size <= 0
+            not isinstance(multi_merge_size, int)
+            or isinstance(multi_merge_size, bool)
+            or multi_merge_size <= 0
         ):
             raise ValueError(
                 "merge_size should be a positive integer value, "
-                "but got merge_size={}".format(merge_size)
+                "but got merge_size={}".format(multi_merge_size)
             )
         if not isinstance(drop_last, bool):
             raise ValueError(
@@ -86,8 +86,8 @@ class MultiBatchSampler(BatchSampler):
             raise ValueError("batch_sampler should yield a list of int.")
 
         self.sampler = sampler
-        self.batch_size = merge_size * sampler.batch_size
-        self.merge_size = merge_size
+        self.batch_size = multi_merge_size * sampler.batch_size
+        self.merge_size = multi_merge_size
         self.drop_last = drop_last
 
     def __iter__(self) -> Iterator[List[int]]:

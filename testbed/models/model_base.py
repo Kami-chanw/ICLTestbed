@@ -32,12 +32,13 @@ class ModelBase(nn.Module):
 
         self.processor = processor_class.from_pretrained(
             model_root,
+            trust_remote_code=True,
             **processor_args,
             **common_args,
         )
 
         self.model = model_class.from_pretrained(
-            model_root, **model_args, **common_args
+            model_root, trust_remote_code=True, **model_args, **common_args
         )
 
         if not hasattr(self, "_model_name"):
@@ -429,15 +430,19 @@ class ModelBase(nn.Module):
                 else self.prompt_template
             )
 
-        if hasattr(self.processor, "apply_chat_template"):
-            return self.processor.apply_chat_template(
-                conversation, chat_template=prompt_template, tokenize=tokenize, **kwargs
-            )
-
-        # all tokenziers have apply_chat_template method
-        return self.processor.tokenizer.apply_chat_template(
-            conversation, chat_template=prompt_template, tokenize=tokenize, **kwargs
+        apply_fn = (
+            self.processor.apply_chat_template
+            if hasattr(self.processor, "apply_chat_template")
+            else self.processor.tokenizer.apply_chat_template
         )
+        apply_fn = partial(
+            apply_fn, chat_template=prompt_template, tokenize=tokenize, **kwargs
+        )
+
+        if isinstance(conversation[0], list):
+            return [apply_fn(con) for con in conversation]
+        else:
+            return apply_fn(conversation)
 
     @overload
     def replace_module(
@@ -543,8 +548,12 @@ class ModelBase(nn.Module):
                 )
 
                 if orig_params != new_params[: len(orig_params)]:
-                    missing_params = set(orig_params) - set(new_params[: len(orig_params)])
-                    unexpected_params =  set(new_params[: len(orig_params)]) - set(orig_params)
+                    missing_params = set(orig_params) - set(
+                        new_params[: len(orig_params)]
+                    )
+                    unexpected_params = set(new_params[: len(orig_params)]) - set(
+                        orig_params
+                    )
                     raise ValueError(
                         "The first few parameters of the new module's forward method do not match "
                         "the original module's, which may lead unexpected behaviors."
@@ -624,7 +633,7 @@ class ModelBase(nn.Module):
 
         Args:
             module_name_or_type (str, List[str], or nn.Module):
-                Name(s) or type of the module whose method is to be replaced. If str, regex matching is used. 
+                Name(s) or type of the module whose method is to be replaced. If str, regex matching is used.
                 If List[str], exact string matching is performed.
             method_name (str):
                 The name of the method to replace (e.g., 'forward').
@@ -636,7 +645,7 @@ class ModelBase(nn.Module):
 
         Raises:
             ValueError:
-                If no module matches the given name or type, or if the new method's signature is incompatible 
+                If no module matches the given name or type, or if the new method's signature is incompatible
                 with the old method's signature when strict is True.
         """
         if isinstance(module_name_or_type, str):
@@ -676,8 +685,12 @@ class ModelBase(nn.Module):
                     orig_params.insert(0, "self")
 
                 if orig_params != new_params[: len(orig_params)]:
-                    missing_params = set(orig_params) - set(new_params[: len(orig_params)])
-                    unexpected_params =  set(new_params[: len(orig_params)]) - set(orig_params)
+                    missing_params = set(orig_params) - set(
+                        new_params[: len(orig_params)]
+                    )
+                    unexpected_params = set(new_params[: len(orig_params)]) - set(
+                        orig_params
+                    )
                     raise ValueError(
                         "The first few parameters of the new function do not match "
                         f"the original method '{method_name}' of module '{name}', which may lead unexpected behaviors."
@@ -696,4 +709,3 @@ class ModelBase(nn.Module):
                     module,
                 ),
             )
-

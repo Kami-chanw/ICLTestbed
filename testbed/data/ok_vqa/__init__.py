@@ -7,11 +7,12 @@
 # properly mapped by our automatic rules. In particular some of the mapping
 # are sometimes constant, e.g. christmas -> christmas which was incorrectly
 # singularized by our inflection.singularize.
+from functools import lru_cache
 import re
-from typing import List, Optional, Union
 import nltk
 from nltk.corpus.reader import VERB
 import inflection
+from testbed.data.common import register_dataset_retriever, register_postprocess
 
 _MANUAL_MATCHES = {
     "police": "police",
@@ -206,39 +207,36 @@ class OKVQAStemmer:
         return " ".join(stemmed_words)
 
 
-def postprocess_generation(predictions: Union[str, List[str]], stop_words: Optional[List[str]] = None):
-    """
-    Post-processes generated predictions by applying text normalization techniques.
+def postprocess(pred, stop_words):
+    @lru_cache
+    def stemmer():
+        return OKVQAStemmer()
 
-    This function processes a single prediction or a list of predictions, allowing for optional truncation 
-    based on stop words. It returns the processed prediction(s) either as a string or a list, depending on the input type.
+    if stop_words is not None:
+        pred = re.split("|".join(stop_words), pred, 1)[0]
+    return stemmer().stem(pred)
 
-    Args:
-        predictions (Union[str, List[str]]): The generated text prediction(s) to be processed.
-        stop_words (Optional[List[str]], *optional*): A list of stop words to truncate predictions. If provided, the 
-            prediction will be truncated at the first occurrence of any stop word.
 
-    Returns:
-        Union[str, List[str]]: The post-processed prediction(s). Returns a string if a single prediction is given, 
-        or a list if multiple predictions are provided.
-    """
-    
-    is_batched = True
-    if isinstance(predictions, str):
-        predictions = [predictions]
-        is_batched = False
+register_postprocess(__name__.split(".")[-1], postprocess)
 
-    if not hasattr(postprocess_generation, "stemmer"):
-        postprocess_generation.stemmer = OKVQAStemmer()
-
-    def process(pred):
-        if stop_words is not None:
-            pred = re.split("|".join(stop_words), pred, 1)[0]
-        return postprocess_generation.stemmer.stem(pred)
-
-    result = [process(pred) for pred in predictions]
-
-    if is_batched:
-        return result
-    else:
-        return result[0]
+register_dataset_retriever(
+    __name__.split(".")[-1],
+    lambda item, is_last: (
+        [
+            {"role": "image", "content": [{"type": "image"}]},
+            {
+                "role": "question",
+                "content": [{"type": "text", "text": item["question"]}],
+            },
+            (
+                {"role": "answer"}
+                if is_last
+                else {
+                    "role": "answer",
+                    "content": [{"type": "text", "text": item["answer"]}],
+                }
+            ),
+        ],
+        item["image"],
+    ),
+)

@@ -1,4 +1,6 @@
+import re
 from typing import Any, Callable, Dict, List, Optional, Union
+import inspect
 from torch.utils.data import (
     Sampler,
     DataLoader,
@@ -8,154 +10,165 @@ from torch.utils.data import (
     Dataset,
     ConcatDataset,
 )
-from testbed.data.sampler import MultiBatchSampler, ConcatSampler
+from .sampler import MultiBatchSampler, ConcatSampler
+from .common import (
+    register_dataset_retriever,
+    register_postprocess,
+    POSTPROCESS_MAPPING,
+    DATASET_RETRIEVER_MAPPING,
+)
+from . import coco, vqav2, ok_vqa, hateful_memes
 
 
 def prepare_input(
     batch: List[List[Dict[str, Any]]],
-    retriever: Callable[[Any, bool], List[Dict]],
+    dataset_sources: Union[str, List[str]],
     instruction: Optional[str] = None,
-):
+) -> List[List[Any]]:
     """
-    Prepares a batch of input data for various tasks such as visual question answering (VQA)
-    or image captioning by formatting the context and optionally adding an instruction.
+    Prepares a batch of data by using dataset-specific retriever functions based on the source of the data.
+    If a dataset source is provided, the corresponding retriever function for that dataset will be used to process
+    the items in the batch. If no dataset source is provided, the function will raise an error.
 
     Args:
-        batch (List[List[Dict[str, Any]]]):
-            A batch of data where each element is a list of dictionaries,
-            representing a context (for example, previous questions/answers or captions).
-        retriever (Callable[[Any, bool], List[Dict]]):
-            A function that takes an item and a boolean flag `is_last` (indicating if the item is the last in the context)
-            and returns a list of dictionaries representing the formatted context.
-        instruction (Optional[str], optional):
-            An optional instruction to prepend to the context. Defaults to None.
+        batch (`List[List[Dict[str, Any]]]`):
+            A batch of data where each element is a list of dictionaries, representing a context.
+        dataset_sources (`Union[str, List[str]]`):
+            A string or a list of strings representing the dataset source for each context in the batch.
+            If a single string is provided, all contexts are assumed to come from that dataset. If a list is
+            provided, its length must match the number of contexts in the batch. Each dataset-specific retriever function
+            is called accordingly for each item in the context.
+        instruction (`Optional[str]`, *optional*):
+            A string instruction to prepend to each context, typically used to guide the task
+            or provide a hint. Defaults to `None`.
 
     Returns:
-        List[List[Dict[str, Any]]]: A list of formatted contexts, where each context includes the messages retrieved
-        by the retriever function, optionally preceded by the instruction.
+        `List[List[Any]]`: A batch of processed data where each context has been formatted using
+        the dataset-specific retriever functions, and optionally prepended with an instruction.
+
+    Raises:
+        `ValueError`: If the length of the dataset_sources list does not match the batch size.
+        `KeyError`: If the dataset_source is not recognized.
     """
-    batch_context = []
-    for context in batch:
-        messages = []
+    if isinstance(dataset_sources, str):
+        dataset_sources = [dataset_sources] * len(batch)
+    elif isinstance(dataset_sources, list):
+        if len(dataset_sources) != len(batch[0]):
+            raise ValueError(
+                "Length of dataset_sources list must match the number of items in the context."
+            )
+
+    for source in dataset_sources:
+        if source not in DATASET_RETRIEVER_MAPPING:
+            raise ValueError(
+                f"Dataset source '{source}' not found in the internal mapping."
+            )
+
+    return_annotations = [
+        inspect.signature(DATASET_RETRIEVER_MAPPING[source]).return_annotation
+        for source in dataset_sources
+    ]
+    if len(set(return_annotations)) > 1:
+        raise ValueError("All dataset retrievers must return the same type.")
+
+    batch_context, batch_additional_outputs = [], []
+
+    for source, context in zip(dataset_sources, batch):
+        messages, additional_outputs = [], []
         if instruction is not None:
             messages.append({"role": "instruction", "content": instruction})
 
         for item in context:
-            messages.extend(retriever(item, item == context[-1]))
+            retriever = DATASET_RETRIEVER_MAPPING[source]
+            prepared_item = retriever(item, item == context[-1])
+
+            if isinstance(prepared_item, tuple):
+                msg, *rest = prepared_item
+                messages.extend(msg)
+                additional_outputs.append(tuple(rest))
+            else:
+                messages.extend(prepared_item)
 
         batch_context.append(messages)
+        batch_additional_outputs.append(additional_outputs)
+
+    if all(isinstance(output, tuple) for output in batch_additional_outputs[0]):
+        if (
+            len(
+                set(
+                    len(output)
+                    for outputs in batch_additional_outputs
+                    for output in outputs
+                )
+            )
+            != 1
+        ):
+            raise RuntimeError(
+                "Inconsistent number of additional outputs across different contexts."
+            )
+
+        return batch_context, *[
+            list(outputs)
+            for outputs in zip(
+                *[
+                    [list(i) for i in zip(*additional_outputs)]
+                    for additional_outputs in batch_additional_outputs
+                ]
+            )
+        ]
 
     return batch_context
 
 
-def prepare_vqa_input(
-    batch: List[List[Dict[str, Any]]],
-    instruction: Optional[str] = None,
-    image_field: str = "image",
-    question_field: str = "question",
-    answer_field: str = "answer",
-):
+def postprocess_generation(
+    predictions: Union[str, List[str]],
+    dataset: str,
+    stop_words: Optional[List[str]] = None,
+) -> Union[str, List[str]]:
     """
-    Prepares inputs for a Visual Question Answering (VQA) task by splitting a batch of question-answer pairs into
-    images, texts, and contexts for processing. Note that this method is especially designed for default prompt template.
-    If you customized prompt template, you should write your own prepare_*_input method.
+    Post-processes generated predictions by applying dataset-specific text normalization techniques.
 
-    This function takes a batch of data containing question-answer pairs and splits it into separate components:
-    - A list of images associated with each question.
-    - A list of textual contexts formatted for further processing, such as feeding into a model.
+    This function processes a single prediction or a list of predictions, allowing for optional truncation
+    based on stop words. It returns the processed prediction(s) either as a string or a list, depending on the input type.
+
 
     Args:
-        batch (`List[List[Dict[str, Any]]]`):
-            A batch of question-answer pairs sampled from a dataloader. The expected shape of the batch is
-            `[batch_size, num_shots + 1]`, where `num_shots` refers to the number of context pairs preceding the
-            target question.
-        instruction (`str`, *optional*):
-            An optional instruction that is prepended to each conversation.
-        image_field (`str`, defaults to "image"):
-            The field used to access the image in each question-answer pair dictionary.
-        question_field (`str`, defaults to "question"):
-            The field used to access the question in each question-answer pair dictionary.
-        answer_field (`str`, defaults to "answer"):
-            The field used to access the answer in each question-answer pair dictionary.
+        predictions (`Union[str, List[str]]`):
+            The generated predictions, either as a single string or a list of strings.
+        dataset (`Optional[str]`, *optional*):
+            The name of the dataset to apply dataset-specific postprocessing. If not provided,
+            default processing is applied. Defaults to `None`.
+        stop_words (`Optional[List[str]]`, *optional*):
+            A list of stop words used to trim the predictions. If provided, the predictions
+            are split at the first occurrence of any stop word. Defaults to `None`.
 
     Returns:
-        - A list of lists containing contexts formatted as dictionaries. These contexts include the instruction
-            (if provided), questions, and answers, ready to be fed into a model for processing. The shape of this
-            list is `[batch_size, num_shots + 1]`.
-        - A list of lists containing images associated with each question-answer pair. The shape of this list
-            is `[batch_size, num_shots + 1]`.
+        `Union[str, List[str]]`: The post-processed predictions. If the input was a single
+        prediction string, a single processed string is returned. If the input was a list of
+        predictions, a list of processed strings is returned.
+
+    Raises:
+        `KeyError`: If a dataset is provided but is not found in the internal mapping.
     """
+    is_batched = True
+    if isinstance(predictions, str):
+        predictions = [predictions]
+        is_batched = False
 
-    def retriever(item: Dict[str, Any], is_last: bool):
-        return [
-            {"role": "image", "content": [{"type": "image"}]},
-            {
-                "role": "question",
-                "content": [{"type": "text", "text": item[question_field]}],
-            },
-            (
-                {"role": "answer"}
-                if is_last
-                else {
-                    "role": "answer",
-                    "content": [{"type": "text", "text": item[answer_field]}],
-                }
-            ),
-        ]
+    def process(pred, stop_words):
+        if stop_words is not None:
+            pred = re.split("|".join(stop_words), pred, 1)[0]
+        return pred
 
-    return prepare_input(batch, retriever, instruction), [
-        [qa[image_field] for qa in context] for context in batch
-    ]
+    process_fn = (
+        POSTPROCESS_MAPPING[dataset] if dataset in POSTPROCESS_MAPPING else process
+    )
+    result = [process_fn(pred, stop_words) for pred in predictions]
 
-
-def prepare_caption_input(
-    batch: List[List[Dict[str, Any]]],
-    instruction: Optional[str] = None,
-    image_field: str = "image",
-    caption_field: str = "caption",
-):
-    """
-    Prepares the input data for a image captioning task by extracting images and formatting
-    contextual information with optional instructions.Note that this method is especially designed for default prompt template.
-    If you customized prompt template, you should write your own prepare_*_input method.
-
-    Args:
-        batch (`List[List[Dict[str, Any]]]`):
-            A batch of data where each element is a list
-            of dictionaries containing image and caption data. Each dictionary should
-            have at least the keys specified by `image_field` and `caption_field`.
-        instruction (`str`, *optional*): An optional instruction string to include in the
-            context messages. Default is None.
-        image_field (`str`, defaults to "image"):
-            The field used to extract images from each dictionary in the batch.
-        caption_field (`str`, defaults to "caption"):
-            The field used to extract captions from each dictionary in the batch.
-
-    Returns:
-        - A list of lists, where each inner list contains a sequence of dictionaries representing
-            the contextual information formatted with roles and content, including images and captions. The shape of this list
-            is `[batch_size, num_shots + 1]`.
-        - A list of lists, where each inner list contains the images for a batch. The shape of this list
-            is `[batch_size, num_shots + 1]`.
-    """
-
-    def retriever(item: Dict[str, Any], is_last: bool):
-        return [
-            {"role": "image", "content": [{"type": "image"}]},
-            {"role": "caption"},
-            (
-                {"role": "caption"}
-                if is_last
-                else {
-                    "role": "caption",
-                    "content": [{"type": "text", "text": item[caption_field]}],
-                }
-            ),
-        ]
-
-    return prepare_input(batch, retriever, instruction), [
-        [item[image_field] for item in context] for context in batch
-    ]
+    if is_batched:
+        return result
+    else:
+        return result[0]
 
 
 def prepare_dataloader(
@@ -242,6 +255,7 @@ def prepare_dataloader(
         batch_list = [
             batch[i * (num_shots + 1) : (i + 1) * (num_shots + 1)]
             for i in range(batch_size)
+            if i * (num_shots + 1) < len(batch)
         ]
         if collate_fn:
             return collate_fn(batch_list)

@@ -3,6 +3,50 @@ from typing import Callable, Dict, List, Union
 import warnings
 import datasets
 
+DATASET_RETRIEVER_MAPPING = {}
+POSTPROCESS_MAPPING = {}
+
+
+def register_dataset_retriever(dataset_name, retriever):
+    """
+    Registers a dataset retriever function for a given dataset.
+
+    The retriever function is responsible for converting an individual item from the dataset
+    into the format required for the model's input. The retriever function takes
+    two arguments: an item from the dataset and a boolean flag indicating whether the item
+    is the last one in the context.
+
+    Args:
+        dataset_name (str):
+            The name of the dataset for which the retriever function is being registered.
+            It must be a non-empty string.
+        retriever (Callable[[Any, bool], Any]):
+            A callable function that processes each dataset item. It transforms an item into
+            the format needed for the model. The boolean flag indicates if the item is the
+            last in the current context.
+    """
+    DATASET_RETRIEVER_MAPPING[dataset_name] = retriever
+
+
+def register_postprocess(dataset_name: str, postprocess: Callable):
+    """
+    Registers a post-process generation function for a given dataset.
+
+    postprocess process model generation by applying text normalization techniques.
+    It processes a single prediction or a list of predictions, allowing for optional truncation
+    based on stop words.
+
+    Args:
+        dataset_name (str):
+            The name of the dataset for which the retriever function is being registered.
+            It must be a non-empty string.
+        postprocess (Callable:
+            The user defined process function to be registered. The function should have the following signature::
+
+                postprocess(predictions, stop_words) -> str
+    """
+    POSTPROCESS_MAPPING[dataset_name] = postprocess
+
 
 def most_common_from_dict(dct):
     lst = [x["answer"] for x in dct]
@@ -59,7 +103,8 @@ def split_generators(
             for p in path:
                 if not p.exists():
                     missing_files.append(str(p))
-                    splits.remove(split_name)
+                    if split_name in splits:
+                        splits.remove(split_name)
                     if verbose:
                         warnings.warn(
                             f"{str(p)} is not exists. The {split_name} split will not be loaded."

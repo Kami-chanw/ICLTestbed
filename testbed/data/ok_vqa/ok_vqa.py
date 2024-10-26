@@ -148,7 +148,8 @@ class OKVQA(datasets.GeneratorBasedBuilder):
             record = question
             record.update(annotation)
             record["image"] = str(
-                images_path.resolve() / f"COCO_{images_path.name}_{record['image_id']:0>12}.jpg"
+                images_path.resolve()
+                / f"COCO_{images_path.name}_{record['image_id']:0>12}.jpg"
             )
             record["answer"] = self.config.answer_selector(question["answers"])
             yield question["question_id"], record
