@@ -28,7 +28,7 @@ def register_dataset_retriever(dataset_name, retriever):
     DATASET_RETRIEVER_MAPPING[dataset_name] = retriever
 
 
-def register_postprocess(dataset_name: str, postprocess: Callable):
+def register_postprocess(dataset_name: str, postprocess: Callable[[str], str]):
     """
     Registers a post-process generation function for a given dataset.
 
@@ -43,7 +43,7 @@ def register_postprocess(dataset_name: str, postprocess: Callable):
         postprocess (Callable:
             The user defined process function to be registered. The function should have the following signature::
 
-                postprocess(predictions, stop_words) -> str
+                postprocess(predictions: str) -> str
     """
     POSTPROCESS_MAPPING[dataset_name] = postprocess
 

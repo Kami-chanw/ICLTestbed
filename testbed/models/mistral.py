@@ -4,19 +4,19 @@ import warnings
 from typing import Any, Dict, List, Union
 from PIL.Image import Image
 from transformers import (
-    AutoModelForVision2Seq,
-    AutoProcessor,
+    AutoModelForCausalLM,
+    AutoTokenizer,
 )
 
 from testbed.models.model_base import HookType, ModelBase
 
 
-class Idefics2(ModelBase):
+class Mistral(ModelBase):
     def __init__(
         self,
         model_root,
-        processor_class=AutoProcessor,
-        model_class=AutoModelForVision2Seq,
+        processor_class=AutoTokenizer,
+        model_class=AutoModelForCausalLM,
         processor_args=None,
         model_args=None,
         **common_args,
@@ -31,9 +31,7 @@ class Idefics2(ModelBase):
         processor_args = (
             processor_args
             if processor_args
-            else dict(
-                chat_template=self.default_prompt_template, do_image_splitting=False
-            )
+            else dict(chat_template=self.default_prompt_template)
         )
 
         super().__init__(
@@ -46,13 +44,12 @@ class Idefics2(ModelBase):
         )
 
     def _register_hook(self, register_fn_name, module_name_or_type, hook, **kwargs):
-        pattern_prefix = None
         if module_name_or_type == HookType.TEXT_MODEL_LAYER:
-            pattern_prefix = r"text_model\."
-        elif module_name_or_type == HookType.VISION_MODEL_LAYER:
-            pattern_prefix = r"vision_model\.encoder\."
-        if pattern_prefix is not None:
-            module_name_or_type = pattern_prefix + r"layers\.\d+$"
+            module_name_or_type = r"model\.layers\.\d+$"
+        elif isinstance(module_name_or_type, HookType):
+            raise ValueError(
+                f"{__class__.__name__} doesn't support hook type of {module_name_or_type.name}"
+            )
 
         return super()._register_hook(
             register_fn_name, module_name_or_type, hook, **kwargs
@@ -60,59 +57,42 @@ class Idefics2(ModelBase):
 
     @property
     def default_prompt_template(self):
-        # adopt idefics1 prompt template, see https://arxiv.org/pdf/2306.16527
         # fmt: off
-        template = (
+        return (
             "{% if messages[0]['role'] == 'instruction' %}"
                 "Instruction: {{ messages[0]['content'] }}\n"
                 "{% set messages = messages[1:] %}"
             "{% endif %}"
             "{% for message in messages %}"
                 "{% if message['role'] != '' %}"
-                    "{{ message['role'].capitalize() }}"
-                    "{% if not 'content' in message or message['content'][0]['type'] == 'image' %}"
-                        "{{':'}}"
-                    "{% else %}"
-                        "{{': '}}"
-                    "{% endif %}" 
-                "{% endif %}"
+                    "{{ message['role'].capitalize() }}: "
+                "{%+ endif %}"
                 "{% if 'content' in message %}"
                     "{% for line in message['content'] %}"
                         "{% if line['type'] == 'text' %}"
                             "{{ line['text'] }}"
-                        "{% elif line['type'] == 'image' %}"
-                            "{{- '<image>' }}"
                         "{% endif %}"
                         "{% if loop.last %}"
-                            "{% if message['role'] == 'answer' or message['role'] == 'caption' %}"
-                                "<end_of_utterance>\n"
-                            "{% else %}"
-                                " "
-                            "{%+ endif %}"
-                        "{% endif %}"
+                            "\n\n"
+                        "{%+ endif %}"
                     "{% endfor %}"
                 "{% endif %}"
             "{% endfor %}"
         )
         # fmt: on
-        if self.model_name == self.BASE_MODEL_NAME:
-            # base model doesn't have <end_of_utterance> token
-            return template.replace("<end_of_utterance>", "\n")
-        return template
 
     def process_input(
         self,
         texts: Union[
             List[Union[str, Dict[str, Any]]], List[List[Union[str, Dict[str, Any]]]]
         ],
-        images: Union[List[Image], List[List[Image]]],
         padding: bool = True,
         return_tensors: str = "pt",
         prompt_template: str = None,
         **kwargs,
     ):
         """
-        Processes text and image inputs for the model.
+        Processes text inputs for the model.
 
         Args:
             texts (Union[List[Union[str, Dict[str, Any]]], List[List[Union[str, Dict[str, Any]]]]]):
@@ -120,11 +100,6 @@ class Idefics2(ModelBase):
                 where each item is either a string or a dictionary. For batched input, this should be a nested list
                 (list of lists) where each inner list represents a batch of texts. Dictionaries can follow the
                 transformers' conversation format, with keys like "role" and "content".
-
-            images (Union[List[Image], List[List[Image]]]):
-                A list of images or a list of lists of images. For unbatched input, this should be a single-level list
-                of images. For batched input, this should be a nested list where each inner list represents a batch of images.
-                Each image should be an instance of the `Image` class.
 
             padding (bool, optional):
                 Whether to pad the inputs to the same length. Defaults to True.
@@ -148,7 +123,6 @@ class Idefics2(ModelBase):
             texts = self.apply_prompt_template(texts, prompt_template=prompt_template)
         return self.processor(
             text=texts,
-            images=images,
             padding=padding,
             return_tensors=return_tensors,
             **kwargs,

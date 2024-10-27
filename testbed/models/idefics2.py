@@ -46,13 +46,14 @@ class Idefics2(ModelBase):
         )
 
     def _register_hook(self, register_fn_name, module_name_or_type, hook, **kwargs):
-        pattern_prefix = None
         if module_name_or_type == HookType.TEXT_MODEL_LAYER:
-            pattern_prefix = r"text_model\."
+            module_name_or_type = r"text_model\.layers\.\d+$"
         elif module_name_or_type == HookType.VISION_MODEL_LAYER:
-            pattern_prefix = r"vision_model\.encoder\."
-        if pattern_prefix is not None:
-            module_name_or_type = pattern_prefix + r"layers\.\d+$"
+            module_name_or_type = r"vision_model\.encoder\.layers\.\d+$"
+        elif isinstance(module_name_or_type, HookType):
+            raise ValueError(
+                f"{__class__.__name__} doesn't support hook type of {module_name_or_type.name}"
+            )
 
         return super()._register_hook(
             register_fn_name, module_name_or_type, hook, **kwargs

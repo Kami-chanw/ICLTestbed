@@ -21,8 +21,8 @@ from . import coco, vqav2, ok_vqa, hateful_memes
 
 
 def prepare_input(
-    batch: List[List[Dict[str, Any]]],
     dataset_sources: Union[str, List[str]],
+    batch: List[List[Dict[str, Any]]],
     instruction: Optional[str] = None,
 ) -> List[List[Any]]:
     """
@@ -31,13 +31,13 @@ def prepare_input(
     the items in the batch. If no dataset source is provided, the function will raise an error.
 
     Args:
-        batch (`List[List[Dict[str, Any]]]`):
-            A batch of data where each element is a list of dictionaries, representing a context.
         dataset_sources (`Union[str, List[str]]`):
             A string or a list of strings representing the dataset source for each context in the batch.
             If a single string is provided, all contexts are assumed to come from that dataset. If a list is
             provided, its length must match the number of contexts in the batch. Each dataset-specific retriever function
             is called accordingly for each item in the context.
+        batch (`List[List[Dict[str, Any]]]`):
+            A batch of data where each element is a list of dictionaries, representing a context.
         instruction (`Optional[str]`, *optional*):
             A string instruction to prepend to each context, typically used to guide the task
             or provide a hint. Defaults to `None`.
@@ -92,7 +92,9 @@ def prepare_input(
         batch_context.append(messages)
         batch_additional_outputs.append(additional_outputs)
 
-    if all(isinstance(output, tuple) for output in batch_additional_outputs[0]):
+    if batch_additional_outputs[0] and all(
+        isinstance(output, tuple) for output in batch_additional_outputs[0]
+    ):
         if (
             len(
                 set(
@@ -121,8 +123,8 @@ def prepare_input(
 
 
 def postprocess_generation(
-    predictions: Union[str, List[str]],
     dataset: str,
+    predictions: Union[str, List[str]],
     stop_words: Optional[List[str]] = None,
 ) -> Union[str, List[str]]:
     """
@@ -133,11 +135,10 @@ def postprocess_generation(
 
 
     Args:
+        dataset (`str`, *optional*):
+            The name of the dataset to apply dataset-specific postprocessing.
         predictions (`Union[str, List[str]]`):
             The generated predictions, either as a single string or a list of strings.
-        dataset (`Optional[str]`, *optional*):
-            The name of the dataset to apply dataset-specific postprocessing. If not provided,
-            default processing is applied. Defaults to `None`.
         stop_words (`Optional[List[str]]`, *optional*):
             A list of stop words used to trim the predictions. If provided, the predictions
             are split at the first occurrence of any stop word. Defaults to `None`.
@@ -155,15 +156,17 @@ def postprocess_generation(
         predictions = [predictions]
         is_batched = False
 
-    def process(pred, stop_words):
+    def preprocess(pred, stop_words):
         if stop_words is not None:
             pred = re.split("|".join(stop_words), pred, 1)[0]
-        return pred
+        return pred.strip()
 
     process_fn = (
-        POSTPROCESS_MAPPING[dataset] if dataset in POSTPROCESS_MAPPING else process
+        POSTPROCESS_MAPPING[dataset]
+        if dataset in POSTPROCESS_MAPPING
+        else lambda pred: pred
     )
-    result = [process_fn(pred, stop_words) for pred in predictions]
+    result = [process_fn(preprocess(pred, stop_words)) for pred in predictions]
 
     if is_batched:
         return result

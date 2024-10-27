@@ -207,13 +207,10 @@ class OKVQAStemmer:
         return " ".join(stemmed_words)
 
 
-def postprocess(pred, stop_words):
+def postprocess(pred):
     @lru_cache
     def stemmer():
         return OKVQAStemmer()
-
-    if stop_words is not None:
-        pred = re.split("|".join(stop_words), pred, 1)[0]
     return stemmer().stem(pred)
 
 

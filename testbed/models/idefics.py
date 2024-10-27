@@ -2,6 +2,8 @@ import os
 import re
 from typing import Any, Dict, List, Union
 import warnings
+import transformers
+from packaging import version
 from PIL.Image import Image
 from transformers import (
     IdeficsForVisionText2Text,
@@ -38,13 +40,14 @@ class Idefics(ModelBase):
             self._model_name = None
 
     def _register_hook(self, register_fn_name, module_name_or_type, hook, **kwargs):
-        pattern_prefix = None
         if module_name_or_type == HookType.TEXT_MODEL_LAYER:
-            pattern_prefix = ""
+            module_name_or_type = r"model\.layers\.\d+$"
         elif module_name_or_type == HookType.VISION_MODEL_LAYER:
-            pattern_prefix = r"vision_model\.encoder\."
-        if pattern_prefix is not None:
-            module_name_or_type = r"model\." + pattern_prefix + r"layers\.\d+$"
+            module_name_or_type = r"model\.vision_model\.encoder\.layers\.\d+$"
+        elif isinstance(module_name_or_type, HookType):
+            raise ValueError(
+                f"{__class__.__name__} doesn't support hook type of {module_name_or_type.name}"
+            )
 
         return super()._register_hook(
             register_fn_name, module_name_or_type, hook, **kwargs
@@ -152,6 +155,11 @@ class Idefics(ModelBase):
                 result.append(text[-1])
             inputs.append(result)
 
-        return self.processor(
-            prompts=inputs, padding=padding, return_tensors=return_tensors, **kwargs
-        )
+        if version.parse(transformers.__version__) < version.parse("4.46.0"):
+            return self.processor(
+                prompts=inputs, padding=padding, return_tensors=return_tensors, **kwargs
+            )
+        else:
+            return self.processor(
+                text=inputs, padding=padding, return_tensors=return_tensors, **kwargs
+            )

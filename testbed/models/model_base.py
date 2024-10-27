@@ -30,16 +30,15 @@ class ModelBase(nn.Module):
         processor_args = processor_args if processor_args else dict()
         model_args = model_args if model_args else dict()
 
-        self.processor = processor_class.from_pretrained(
-            model_root,
-            trust_remote_code=True,
-            **processor_args,
-            **common_args,
-        )
+        def instantiate(cls: type, **kwargs):
+            is_auto_cls = cls.__name__.startswith("Auto")
+            trust_remote_code = kwargs.pop("trust_remote_code", is_auto_cls)
+            return cls.from_pretrained(
+                model_root, trust_remote_code=trust_remote_code, **kwargs
+            )
 
-        self.model = model_class.from_pretrained(
-            model_root, trust_remote_code=True, **model_args, **common_args
-        )
+        self.processor = instantiate(processor_class, **{**processor_args, **common_args})
+        self.model = instantiate(model_class, **{**model_args, **common_args})
 
         if not hasattr(self, "_model_name"):
             self._model_name = None
@@ -335,6 +334,10 @@ class ModelBase(nn.Module):
 
     @property
     def default_prompt_template(self) -> str:
+        if hasattr(self.processor, "get_chat_template"):
+            return self.processor.get_chat_template()
+        if hasattr(self.processor.tokenizer, "get_chat_template"):
+            return self.processor.tokenizer.get_chat_template()
         raise NotImplementedError()
 
     @property

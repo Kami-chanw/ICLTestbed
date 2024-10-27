@@ -32,13 +32,11 @@ register_dataset_retriever(
 )
 
 
-def postprocess(pred, stop_words):
+def postprocess(pred):
     hateful_keywords = ["yes", "y", "hateful", "hate"]
     non_hateful_keywords = ["no", "n", "non-hateful", "not hateful", "benign"]
-    if stop_words is not None:
-        pred = re.split("|".join(stop_words), pred, 1)[0]
-
-    pred = pred.strip().lower()
+    
+    pred = pred.lower()
     tokens = nltk.word_tokenize(pred)
 
     for token in tokens:
