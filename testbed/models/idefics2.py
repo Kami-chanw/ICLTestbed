@@ -68,6 +68,7 @@ class Idefics2(ModelBase):
                 "Instruction: {{ messages[0]['content'] }}\n"
                 "{% set messages = messages[1:] %}"
             "{% endif %}"
+            "{% set last_role = messages[0]['role'] %}"
             "{% for message in messages %}"
                 "{% if message['role'] != '' %}"
                     "{{ message['role'].capitalize() }}"
@@ -84,16 +85,16 @@ class Idefics2(ModelBase):
                         "{% elif line['type'] == 'image' %}"
                             "{{- '<image>' }}"
                         "{% endif %}"
-                        "{% if loop.last %}"
-                            "{% if message['role'] == 'answer' or message['role'] == 'caption' %}"
-                                "<end_of_utterance>\n"
-                            "{% else %}"
-                                " "
-                            "{%+ endif %}"
-                        "{% else %}"
+                        "{% if not loop.last %}"
                             " "
                         "{%+ endif %}"
                     "{% endfor %}"
+                    "{% set is_end_of_round = loop.nextitem is not defined or loop.nextitem['role'] == last_role %}"
+                    "{% if is_end_of_round %}"
+                        "<end_of_utterance\n>"
+                    "{% else %}"
+                        " "
+                    "{%+ endif %}"
                 "{% endif %}"
             "{% endfor %}"
         )
@@ -109,8 +110,6 @@ class Idefics2(ModelBase):
             List[Union[str, Dict[str, Any]]], List[List[Union[str, Dict[str, Any]]]]
         ],
         images: Union[List[Image], List[List[Image]]],
-        padding: bool = True,
-        return_tensors: str = "pt",
         prompt_template: str = None,
         **kwargs,
     ):
@@ -129,13 +128,6 @@ class Idefics2(ModelBase):
                 of images. For batched input, this should be a nested list where each inner list represents a batch of images.
                 Each image should be an instance of the `Image` class.
 
-            padding (bool, optional):
-                Whether to pad the inputs to the same length. Defaults to True.
-
-            return_tensors (str, optional):
-                The type of tensors to return. Defaults to "pt" for PyTorch tensors.
-                Can be set to other formats depending on the framework (e.g., "tf" for TensorFlow).
-
             prompt_template (str, optional):
                 An optional template string used to format the input texts if they are provided as dictionaries.
 
@@ -149,10 +141,11 @@ class Idefics2(ModelBase):
             isinstance(texts[0], list) and isinstance(texts[0][0], dict)
         ):
             texts = self.apply_prompt_template(texts, prompt_template=prompt_template)
+        
         return self.processor(
             text=texts,
             images=images,
-            padding=padding,
-            return_tensors=return_tensors,
+            padding=kwargs.pop("padding", True),
+            return_tensors=kwargs.pop("return_tensors", "pt"),
             **kwargs,
         )

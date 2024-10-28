@@ -74,7 +74,7 @@ class Mistral(ModelBase):
                         "{% endif %}"
                         "{% if loop.last %}"
                             "\n\n"
-                        "{%+ endif %}"
+                        "{% endif %}"
                     "{% endfor %}"
                 "{% endif %}"
             "{% endfor %}"
@@ -86,8 +86,6 @@ class Mistral(ModelBase):
         texts: Union[
             List[Union[str, Dict[str, Any]]], List[List[Union[str, Dict[str, Any]]]]
         ],
-        padding: bool = True,
-        return_tensors: str = "pt",
         prompt_template: str = None,
         **kwargs,
     ):
@@ -100,13 +98,6 @@ class Mistral(ModelBase):
                 where each item is either a string or a dictionary. For batched input, this should be a nested list
                 (list of lists) where each inner list represents a batch of texts. Dictionaries can follow the
                 transformers' conversation format, with keys like "role" and "content".
-
-            padding (bool, optional):
-                Whether to pad the inputs to the same length. Defaults to True.
-
-            return_tensors (str, optional):
-                The type of tensors to return. Defaults to "pt" for PyTorch tensors.
-                Can be set to other formats depending on the framework (e.g., "tf" for TensorFlow).
 
             prompt_template (str, optional):
                 An optional template string used to format the input texts if they are provided as dictionaries.
@@ -121,9 +112,10 @@ class Mistral(ModelBase):
             isinstance(texts[0], list) and isinstance(texts[0][0], dict)
         ):
             texts = self.apply_prompt_template(texts, prompt_template=prompt_template)
+        
         return self.processor(
             text=texts,
-            padding=padding,
-            return_tensors=return_tensors,
+            padding=kwargs.pop("padding", True),
+            return_tensors=kwargs.pop("return_tensors", "pt"),
             **kwargs,
         )
