@@ -45,10 +45,6 @@ def prepare_input(
     Returns:
         `List[List[Any]]`: A batch of processed data where each context has been formatted using
         the dataset-specific retriever functions, and optionally prepended with an instruction.
-
-    Raises:
-        `ValueError`: If the length of the dataset_sources list does not match the batch size.
-        `KeyError`: If the dataset_source is not recognized.
     """
     if isinstance(dataset_sources, str):
         dataset_sources = [dataset_sources] * len(batch)
@@ -61,7 +57,7 @@ def prepare_input(
     for source in dataset_sources:
         if source not in DATASET_RETRIEVER_MAPPING:
             raise ValueError(
-                f"Dataset source '{source}' not found in the internal mapping."
+                f"The retriever of '{source}' is not registered, use `register_input_retriever` first."
             )
 
     return_annotations = [
@@ -147,9 +143,6 @@ def postprocess_generation(
         `Union[str, List[str]]`: The post-processed predictions. If the input was a single
         prediction string, a single processed string is returned. If the input was a list of
         predictions, a list of processed strings is returned.
-
-    Raises:
-        `KeyError`: If a dataset is provided but is not found in the internal mapping.
     """
     is_batched = True
     if isinstance(predictions, str):
@@ -161,12 +154,14 @@ def postprocess_generation(
             pred = re.split("|".join(stop_words), pred, 1)[0]
         return pred.strip()
 
-    process_fn = (
-        POSTPROCESS_MAPPING[dataset]
-        if dataset in POSTPROCESS_MAPPING
-        else lambda pred: pred
-    )
-    result = [process_fn(preprocess(pred, stop_words)) for pred in predictions]
+    if dataset not in POSTPROCESS_MAPPING:
+        raise ValueError(
+            f"The post process method of {dataset} is not registered, use `register_postprocess` first."
+        )
+    result = [
+        POSTPROCESS_MAPPING[dataset](preprocess(pred, stop_words))
+        for pred in predictions
+    ]
 
     if is_batched:
         return result
