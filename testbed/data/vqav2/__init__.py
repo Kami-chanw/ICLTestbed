@@ -1,4 +1,4 @@
-from testbed.data.common import register_dataset_retriever
+from testbed.data.common import register_dataset_retriever, register_postprocess
 
 register_dataset_retriever(
     __name__.split(".")[-1],
@@ -22,4 +22,5 @@ register_dataset_retriever(
     ),
 )
 
-# no need to register post process for vqav2, just use default post process
+# mroe post process will be done in evaluate procedure
+register_postprocess(__name__.split(".")[-1], lambda pred: pred)

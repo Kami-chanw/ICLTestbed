@@ -1,4 +1,4 @@
-from testbed.data.common import register_dataset_retriever
+from testbed.data.common import register_dataset_retriever, register_postprocess
 
 register_dataset_retriever(
     __name__.split(".")[-1],
@@ -17,3 +17,5 @@ register_dataset_retriever(
         item["image"],
     ),
 )
+
+register_postprocess(__name__.split(".")[-1], lambda pred: pred)
