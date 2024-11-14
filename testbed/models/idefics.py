@@ -97,7 +97,7 @@ class Idefics(ModelBase):
 
     def process_input(
         self,
-        texts: Union[
+        text: Union[
             List[Union[str, Dict[str, Any]]], List[List[Union[str, Dict[str, Any]]]]
         ],
         images: Union[List[Image], List[List[Image]]],
@@ -108,7 +108,7 @@ class Idefics(ModelBase):
         Processes text and image inputs for the model.
 
         Args:
-            texts (Union[List[Union[str, Dict[str, Any]]], List[List[Union[str, Dict[str, Any]]]]]):
+            text (Union[List[Union[str, Dict[str, Any]]], List[List[Union[str, Dict[str, Any]]]]]):
                 A list of texts or a list of lists of texts. For unbatched input, this should be a single-level list
                 where each item is either a string or a dictionary. For batched input, this should be a nested list
                 (list of lists) where each inner list represents a batch of texts. Dictionaries can follow the
@@ -128,31 +128,30 @@ class Idefics(ModelBase):
         Returns:
             The output of the `processor` function, which is the processed input ready for the model.
         """
-        if isinstance(texts[0], dict) or (
-            isinstance(texts[0], list) and isinstance(texts[0][0], dict)
+        if isinstance(text[0], dict) or (
+            isinstance(text[0], list) and isinstance(text[0][0], dict)
         ):
-            texts = self.apply_prompt_template(texts, prompt_template=prompt_template)
-        inputs = []
-        for i, (text, image_list) in enumerate(zip(texts, images)):
-            text = text.split("<image>")
-            result = []
-            if len(text) - 1 != len(image_list):
-                raise ValueError(
-                    f"In the {i}-th input, the number of images {len(image_list)} does not match the number of image tokens {len(text) - 1} in the text."
-                )
-            for seg, image in zip(text, image_list):
-                if seg != "":
-                    result.append(seg)
-                result.append(image)
-            if text[-1] != "":  # the last question without answer
-                result.append(text[-1])
-            inputs.append(result)
+            text = self.apply_prompt_template(text, prompt_template=prompt_template)
+        if version.parse(transformers.__version__) < version.parse("4.46.0"):
+            inputs = []
+            for i, (text, image_list) in enumerate(zip(text, images)):
+                text = text.split("<image>")
+                result = []
+                if len(text) - 1 != len(image_list):
+                    raise ValueError(
+                        f"In the {i}-th input, the number of images {len(image_list)} does not match the number of image tokens {len(text) - 1} in the text."
+                    )
+                for seg, image in zip(text, image_list):
+                    if seg != "":
+                        result.append(seg)
+                    result.append(image)
+                if text[-1] != "":  # the last question without answer
+                    result.append(text[-1])
+                inputs.append(result)
 
-        process = (
-            partial(self.processor, prompts=inputs)
-            if version.parse(transformers.__version__) < version.parse("4.46.0")
-            else partial(self.processor, text=inputs)
-        )
+            process = partial(self.processor, prompts=inputs)
+        else:
+            process = partial(self.processor, text=text, images=images)
         
         return process(
             padding=kwargs.pop("padding", True),

@@ -4,52 +4,24 @@ from pathlib import Path
 import datasets
 from testbed.data.common import split_generators
 
-
-_CITATION = """
-@article{DBLP:journals/corr/LinMBHPRDZ14,
-  author    = {Tsung{-}Yi Lin and
-               Michael Maire and
-               Serge J. Belongie and
-               Lubomir D. Bourdev and
-               Ross B. Girshick and
-               James Hays and
-               Pietro Perona and
-               Deva Ramanan and
-               Piotr Doll{\'{a}}r and
-               C. Lawrence Zitnick},
-  title     = {Microsoft {COCO:} Common Objects in Context},
-  journal   = {CoRR},
-  volume    = {abs/1405.0312},
-  year      = {2014},
-  url       = {http://arxiv.org/abs/1405.0312},
-  eprinttype = {arXiv},
-  eprint    = {1405.0312},
-  timestamp = {Mon, 13 Aug 2018 16:48:13 +0200},
-  biburl    = {https://dblp.org/rec/journals/corr/LinMBHPRDZ14.bib},
-  bibsource = {dblp computer science bibliography, https://dblp.org}
-}
-"""
-
 _DESCRIPTION = """
-MS COCO is a large-scale object detection, segmentation, and captioning dataset.
-COCO has several features: Object segmentation, Recognition in context, Superpixel stuff segmentation, 330K images (>200K labeled), 1.5 million object instances, 80 object categories, 91 stuff categories, 5 captions per image, 250,000 people with keypoints.
+Flickr30k and Flickr8k are popular image captioning datasets, containing images with multiple associated captions. 
+Flickr30k contains 30,000 images, while Flickr8k contains 8,000 images, and both datasets are used for training and evaluating image captioning models.
 """
-
-_HOMEPAGE = "https://cocodataset.org/#home"
 
 _LICENSE = "CC BY 4.0"
 
-
-_IMAGES_URLS = {
-    "train": "http://images.cocodataset.org/zips/train2014.zip",
-    "validation": "http://images.cocodataset.org/zips/val2014.zip",
-}
-
-_KARPATHY_FILES_URL = (
-    "https://cs.stanford.edu/people/karpathy/deepimagesent/caption_datasets.zip"
+# Flickr30k image URL (requires manual download)
+_FLICKR30K_IMAGES_URL = (
+    "https://shannon.cs.illinois.edu/DenotationGraph/data/index.html"  # Manual download
 )
 
+# Flickr8k image URL (requires manual download from Kaggle)
+_FLICKR8K_IMAGES_URL = (
+    "https://www.kaggle.com/datasets/adityajn105/flickr8k"  # Manual download
+)
 
+# Define the Features based on the provided item structure
 _FEATURES = datasets.Features(
     {
         "image": datasets.Image(),
@@ -67,23 +39,34 @@ _FEATURES = datasets.Features(
 )
 
 _SUB_FOLDER_OR_FILE_NAME = {
-    "annotations": {
-        "train": "dataset_coco.json",
-        "val": "dataset_coco.json",
-        "test": "dataset_coco.json",
-        "restval": "dataset_coco.json",
+    "flickr30k": {
+        "annotations": {
+            "train": "dataset_flickr30k.json",
+            "val": "dataset_flickr30k.json",
+            "test": "dataset_flickr30k.json",
+        },
+        "images": {
+            "train": "flickr30k-images",
+            "val": "flickr30k-images",
+            "test": "flickr30k-images",
+        },
     },
-    "images": {
-        "train": "train2014",
-        "val": "val2014",
-        "test": "val2014",
-        "restval": "val2014",
+    "flickr8k": {
+        "annotations": {
+            "train": "dataset_flickr8k.json",
+            "val": "dataset_flickr8k.json",
+            "test": "dataset_flickr8k.json",
+        },
+        "images": {
+            "train": "flickr8k-images",
+            "val": "flickr8k-images",
+            "test": "flickr8k-images",
+        },
     },
 }
 
 
-class COCOConfig(datasets.BuilderConfig):
-
+class FlickrConfig(datasets.BuilderConfig):
     def __init__(self, images_dir=None, caption_selector=None, verbose=True, **kwargs):
         self.images_dir = images_dir if images_dir is not None else self.data_dir
         self.verbose = verbose
@@ -92,21 +75,32 @@ class COCOConfig(datasets.BuilderConfig):
             if caption_selector is not None
             else lambda dct: dct[0]["raw"]  # select the 1st sentence as ground truth
         )
-
         super().__init__(**kwargs)
 
 
-class COCO(datasets.GeneratorBasedBuilder):
+class Flickr(datasets.GeneratorBasedBuilder):
     VERSION = datasets.Version("1.0.0")
-    BUILDER_CONFIG_CLASS = COCOConfig
+
+    BUILDER_CONFIG_CLASS = FlickrConfig
+    DEFAULT_CONFIG_NAME = "flickr30k"
+    BUILDER_CONFIGS = [
+        FlickrConfig(
+            name="flickr30k",
+            description="Flickr30k dataset for image captioning.",
+            version=datasets.Version("1.0.0"),
+        ),
+        FlickrConfig(
+            name="flickr8k",
+            description="Flickr8k dataset for image captioning.",
+            version=datasets.Version("1.0.0"),
+        ),
+    ]
 
     def _info(self):
         return datasets.DatasetInfo(
             description=_DESCRIPTION,
             features=_FEATURES,
-            homepage=_HOMEPAGE,
             license=_LICENSE,
-            citation=_CITATION,
         )
 
     def _split_generators(self, dl_manager):
@@ -119,15 +113,14 @@ class COCO(datasets.GeneratorBasedBuilder):
                 if file_type != "images"
                 else self.config.images_dir
             )
-            / _SUB_FOLDER_OR_FILE_NAME[file_type][split_name],
-            _SUB_FOLDER_OR_FILE_NAME,
+            / _SUB_FOLDER_OR_FILE_NAME[self.config.name][file_type][split_name],
+            _SUB_FOLDER_OR_FILE_NAME[self.config.name],
             self.config.verbose,
         )
 
     def _generate_examples(self, split, annotations_path, images_path):
         with open(annotations_path, "r", encoding="utf-8") as fi:
             annotations = json.load(fi)
-
             for image_metadata in annotations["images"]:
                 if image_metadata["split"] == split:
                     record = {
@@ -141,7 +134,6 @@ class COCO(datasets.GeneratorBasedBuilder):
                         "filename": image_metadata["filename"],
                         "imgid": image_metadata["imgid"],
                         "split": image_metadata["split"],
-                        "cocoid": image_metadata["cocoid"],
                         "caption": self.config.caption_selector(
                             image_metadata["sentences"]
                         ),

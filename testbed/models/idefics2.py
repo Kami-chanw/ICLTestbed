@@ -106,7 +106,7 @@ class Idefics2(ModelBase):
 
     def process_input(
         self,
-        texts: Union[
+        text: Union[
             List[Union[str, Dict[str, Any]]], List[List[Union[str, Dict[str, Any]]]]
         ],
         images: Union[List[Image], List[List[Image]]],
@@ -117,7 +117,7 @@ class Idefics2(ModelBase):
         Processes text and image inputs for the model.
 
         Args:
-            texts (Union[List[Union[str, Dict[str, Any]]], List[List[Union[str, Dict[str, Any]]]]]):
+            text (Union[List[Union[str, Dict[str, Any]]], List[List[Union[str, Dict[str, Any]]]]]):
                 A list of texts or a list of lists of texts. For unbatched input, this should be a single-level list
                 where each item is either a string or a dictionary. For batched input, this should be a nested list
                 (list of lists) where each inner list represents a batch of texts. Dictionaries can follow the
@@ -137,13 +137,13 @@ class Idefics2(ModelBase):
         Returns:
             The output of the `processor` function, which is the processed input ready for the model.
         """
-        if isinstance(texts[0], dict) or (
-            isinstance(texts[0], list) and isinstance(texts[0][0], dict)
+        if isinstance(text[0], dict) or (
+            isinstance(text[0], list) and isinstance(text[0][0], dict)
         ):
-            texts = self.apply_prompt_template(texts, prompt_template=prompt_template)
+            text = self.apply_prompt_template(text, prompt_template=prompt_template)
         
         return self.processor(
-            text=texts,
+            text=text,
             images=images,
             padding=kwargs.pop("padding", True),
             return_tensors=kwargs.pop("return_tensors", "pt"),
