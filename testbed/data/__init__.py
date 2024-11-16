@@ -1,6 +1,9 @@
 import re
 from typing import Any, Callable, Dict, List, Optional, Union
 import inspect
+import os
+import importlib.util
+import sys
 from torch.utils.data import (
     Sampler,
     DataLoader,
@@ -17,7 +20,14 @@ from .common import (
     POSTPROCESS_MAPPING,
     DATASET_RETRIEVER_MAPPING,
 )
-from . import coco, vqav2, ok_vqa, hateful_memes
+
+# auto import dataset package
+for module_name in os.listdir(os.path.dirname(__file__)):
+    module_path = os.path.join(os.path.dirname(__file__), module_name)
+    if os.path.isdir(module_path) and os.path.isfile(
+        os.path.join(module_path, "__init__.py")
+    ):
+        importlib.import_module(f".{module_name}", package=__name__)
 
 
 def prepare_input(
