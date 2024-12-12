@@ -97,9 +97,7 @@ class Idefics(ModelBase):
 
     def process_input(
         self,
-        text: Union[
-            List[Union[str, Dict[str, Any]]], List[List[Union[str, Dict[str, Any]]]]
-        ],
+        text: Union[str, List[Union[str, Dict[str, Any]]], List[List[Dict[str, Any]]]],
         images: Union[List[Image], List[List[Image]]],
         prompt_template: str = None,
         **kwargs,
@@ -108,11 +106,12 @@ class Idefics(ModelBase):
         Processes text and image inputs for the model.
 
         Args:
-            text (Union[List[Union[str, Dict[str, Any]]], List[List[Union[str, Dict[str, Any]]]]]):
-                A list of texts or a list of lists of texts. For unbatched input, this should be a single-level list
-                where each item is either a string or a dictionary. For batched input, this should be a nested list
-                (list of lists) where each inner list represents a batch of texts. Dictionaries can follow the
-                transformers' conversation format, with keys like "role" and "content".
+            text (str, List[Union[str, Dict[str, Any]]], List[List[Dict[str, Any]]]):
+                A single string, a list of strings or dictionaries, or a nested list (batch) of strings/dictionaries.
+                For unbatched input (single text), this should be a string or a list of dict, where each item is
+                either a string or a doct (following the transformers' conversation format with
+                keys like "role" and "content").
+                For batched input, this should be a nested list (list of lists) or a list of strings
 
             images (Union[List[Image], List[List[Image]]]):
                 A list of images or a list of lists of images. For unbatched input, this should be a single-level list
@@ -128,31 +127,38 @@ class Idefics(ModelBase):
         Returns:
             The output of the `processor` function, which is the processed input ready for the model.
         """
-        if isinstance(text[0], dict) or (
-            isinstance(text[0], list) and isinstance(text[0][0], dict)
+        if isinstance(text, str) or (
+            isinstance(text, list) and isinstance(text[0], dict)
         ):
+            text = [text]
+            images = [images]
+
+        if isinstance(text[0][0], dict):
             text = self.apply_prompt_template(text, prompt_template=prompt_template)
+
         if version.parse(transformers.__version__) < version.parse("4.46.0"):
+            assert len(text) == len(images)
             inputs = []
-            for i, (text, image_list) in enumerate(zip(text, images)):
-                text = text.split("<image>")
-                result = []
-                if len(text) - 1 != len(image_list):
+            for i, (ctx, image_list) in enumerate(zip(text, images)):
+                ctx = ctx.split("<image>")
+
+                if len(ctx) - 1 != len(image_list):
                     raise ValueError(
                         f"In the {i}-th input, the number of images {len(image_list)} does not match the number of image tokens {len(text) - 1} in the text."
                     )
-                for seg, image in zip(text, image_list):
+                result = []
+                for seg, image in zip(ctx, image_list):
                     if seg != "":
                         result.append(seg)
                     result.append(image)
-                if text[-1] != "":  # the last question without answer
-                    result.append(text[-1])
+                if ctx[-1] != "":  # the last question without answer
+                    result.append(ctx[-1])
                 inputs.append(result)
 
             process = partial(self.processor, prompts=inputs)
         else:
             process = partial(self.processor, text=text, images=images)
-        
+
         return process(
             padding=kwargs.pop("padding", True),
             return_tensors=kwargs.pop("return_tensors", "pt"),

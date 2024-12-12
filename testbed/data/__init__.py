@@ -212,7 +212,7 @@ def prepare_dataloader(
             examples and one query. The function supports sampling from single or multiple datasets
             according to the specified number of examples per dataset.
         samplers (`Samper` or `List[Sampler`], *optional*):
-            Samplers for each dataset. If not specified, `SequentialSampler` will be applied.
+            Samplers for each dataset. If not specified, `SequentialSampler` or `RandomSampler` will be applied, based on `shuffle`.
         **kwargs: Additional arguments for DataLoader.
 
     Returns:
@@ -299,9 +299,7 @@ def prepare_dataloader(
     num_per_dataset = check_consistent(
         "num_per_dataset", num_per_dataset, [num_shots + 1]
     )
-    samplers = check_consistent(
-        "samplers", samplers, [SequentialSampler(dataset) for dataset in datasets]
-    )
+    samplers = check_consistent("samplers", samplers, [None for _ in datasets])
 
     if sum(num_per_dataset) != num_shots + 1:
         raise ValueError("The sum of num_per_dataset should be equal to num_shots + 1.")
