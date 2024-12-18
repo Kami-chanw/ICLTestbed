@@ -8,7 +8,7 @@ from transformers import (
     AutoProcessor,
 )
 
-from testbed.models.model_base import HookType, ModelBase
+from testbed.models.model_base import ModelBase
 
 
 class Idefics2(ModelBase):
@@ -43,20 +43,6 @@ class Idefics2(ModelBase):
             processor_args=processor_args,
             model_args=model_args,
             **common_args,
-        )
-
-    def _register_hook(self, register_fn_name, module_name_or_type, hook, **kwargs):
-        if module_name_or_type == HookType.TEXT_MODEL_LAYER:
-            module_name_or_type = r"text_model\.layers\.\d+$"
-        elif module_name_or_type == HookType.VISION_MODEL_LAYER:
-            module_name_or_type = r"vision_model\.encoder\.layers\.\d+$"
-        elif isinstance(module_name_or_type, HookType):
-            raise ValueError(
-                f"{__class__.__name__} doesn't support hook type of {module_name_or_type.name}"
-            )
-
-        return super()._register_hook(
-            register_fn_name, module_name_or_type, hook, **kwargs
         )
 
     @property
@@ -141,7 +127,7 @@ class Idefics2(ModelBase):
             isinstance(text[0], list) and isinstance(text[0][0], dict)
         ):
             text = self.apply_prompt_template(text, prompt_template=prompt_template)
-        
+
         return self.processor(
             text=text,
             images=images,

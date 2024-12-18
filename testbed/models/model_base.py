@@ -1,4 +1,4 @@
-import enum
+from abc import ABC, abstractmethod
 from functools import lru_cache, partial
 import inspect
 import re
@@ -9,13 +9,11 @@ import torch
 from torch.utils.hooks import RemovableHandle
 import torch.nn as nn
 
-
-class HookType(enum.Enum):
-    TEXT_MODEL_LAYER = enum.auto()
-    VISION_MODEL_LAYER = enum.auto()
+from ..utils.tracker import TrackerBase
+from ..utils import try_inject_params
 
 
-class ModelBase(nn.Module):
+class ModelBase(nn.Module, ABC):
     def __init__(
         self,
         model_root,
@@ -37,95 +35,85 @@ class ModelBase(nn.Module):
                 model_root, trust_remote_code=trust_remote_code, **kwargs
             )
 
-        self.processor = instantiate(processor_class, **{**processor_args, **common_args})
+        self.processor = instantiate(
+            processor_class, **{**processor_args, **common_args}
+        )
         self.model = instantiate(model_class, **{**model_args, **common_args})
 
         if not hasattr(self, "_model_name"):
             self._model_name = None
 
         self.config = self.model.config
-
         self.prompt_template = None
 
-    def _try_inject_params(self, fn, **kwargs):
-        """
-        Try to inject positional arguments to fn, if applicable.
-
-        This function checks whether the function accepts keyword arguments (**kwargs) or
-        explicitly defined arguments that are present in `kwargs`. If the function supports **kwargs,
-        all arguments in `kwargs` are passed to the fn. Otherwise, only the arguments explicitly
-        defined in the function's signature and present in `kwargs` are passed. If no matching
-        arguments exist, the fn is returned unchanged.
-
-        Args:
-            fn (Callable): The function to be injected.
-            **kwargs: Additional arguments that may be passed to the fn.
-
-        Returns:
-            Callable: A partially applied function if `kwargs` contains matching arguments;
-                      otherwise, the original function.
-
-        Example:
-            If the function supports `**kwargs` or specific arguments from `kwargs`:
-
-            >>> def hook_fn(module, input, output, module_name):
-            >>>     print(f"Module name: {module_name}")
-
-            This method will pass the `module_name` argument from `kwargs` to `fn`.
-        """
-        signature = inspect.signature(fn)
-        supports_kwargs = any(
-            p.kind == inspect.Parameter.VAR_KEYWORD
-            for p in signature.parameters.values()
-        )
-        filtered_args = (
-            {k: v for k, v in kwargs.items() if k in signature.parameters}
-            if not supports_kwargs
-            else kwargs
-        )
-
-        if filtered_args:
-            return partial(fn, **filtered_args)
-        return fn
-
-    def _register_hook(self, register_fn_name, module_name_or_type, hook, **kwargs):
+    def _register_hook(self, register_fn_name, module_name, hook, **kwargs):
         @lru_cache
         def module_dict():
             return {k: v for k, v in self.model.named_modules()}
 
-        if isinstance(module_name_or_type, str):
+        if isinstance(module_name, str):
             # Use regex to match module names
             return [
                 getattr(module, register_fn_name)(
-                    self._try_inject_params(hook, module_name=name), **kwargs
+                    try_inject_params(hook, module_name=name), **kwargs
                 )
                 for name, module in module_dict().items()
-                if re.search(module_name_or_type, name)
+                if re.search(module_name, name)
             ]
 
-        elif isinstance(module_name_or_type, list):
+        elif isinstance(module_name, list) and isinstance(module_name[0], str):
             # Exact match for each module name in the list
             return [
                 getattr(module_dict()[name], register_fn_name)(
-                    self._try_inject_params(hook, module_name=name), **kwargs
+                    try_inject_params(hook, module_name=name), **kwargs
                 )
-                for name in module_name_or_type
+                for name in module_name
                 if name in module_dict()
             ]
-
-        elif isinstance(module_name_or_type, HookType):
-            raise ValueError(
-                f"{module_name_or_type.name} is unsupported or not implemented by {type(self).__name__}."
+        else:
+            raise TypeError(
+                f"module_name should be str or list of str, but got {type(module_name)}"
             )
 
-        return getattr(module_dict()[module_name_or_type], register_fn_name)(
-            self._try_inject_params(hook, module_name=module_name_or_type), **kwargs
-        )
+    def add_tracker(self, module_name: Union[str, List[str]], tracker: TrackerBase):
+        """
+        Add a tracker for modules specified by `target`.
+
+        Args:
+            module_name (str or List[str]):
+                If str, then call add_tracker for the module named `module_name` using regex matching.
+                If List[str], then add_tracker is called for each named `module_name` using exact matching.
+            tracker (TrackerBase):
+                A tracker to add.
+        """
+        if isinstance(module_name, str):
+            matched_modules = {
+                name: module
+                for name, module in self.model.named_modules()
+                if re.search(module_name, name)
+            }
+        elif isinstance(module_name, list):
+            matched_modules = {
+                name: module
+                for name, module in self.model.named_modules()
+                if name in module_name
+            }
+        else:
+            matched_modules = None
+
+        if not matched_modules:
+            raise ValueError(f"No modules found matching {module_name}")
+
+        tracker.track(list(matched_modules.values()))
+        for name, status in zip(
+            matched_modules.keys(), tracker._module_refs_dict.values()
+        ):
+            status.module_name = name
 
     @overload
     def register_forward_hook(
         self,
-        module_name_or_type: Union[str, List[str], HookType],
+        module_name: Union[str, List[str]],
         hook: Callable,
         *,
         prepend: bool = False,
@@ -137,10 +125,9 @@ class ModelBase(nn.Module):
         for details. The hook will be called every time after forward() has computed an output.
 
         Args:
-            module_name_or_type (str, List[str], or HookType):
-                If str, then call register_forward_hook for the module named using regex matching.
-                If List[str], then register_forward_hook is called for each named module using exact matching.
-                If HookType, then register_forward_hook is called for the module of the specified type. It should be implemented by derived classes.
+            module_name (str or List[str]):
+                If str, then call register_forward_hook for the module named `module_name` using regex matching.
+                If List[str], then register_forward_hook is called for each named `module_name` using exact matching.
             hook (Callable):
                 The user defined hook to be registered. The hook should have the following signature::
 
@@ -154,7 +141,7 @@ class ModelBase(nn.Module):
     @overload
     def register_foward_hook(
         self,
-        hook,
+        hook: Callable,
         *,
         prepend: bool = False,
         with_kwargs: bool = False,
@@ -188,7 +175,7 @@ class ModelBase(nn.Module):
     @overload
     def register_forward_pre_hook(
         self,
-        module_name_or_type: Union[str, List[str], HookType],
+        module_name: Union[str, List[str]],
         hook: Callable,
         *,
         prepend: bool = False,
@@ -199,10 +186,9 @@ class ModelBase(nn.Module):
         for details. The hook will be called every time before forward() is invoked.
 
         Args:
-            module_name_or_type (str, List[str], or HookType):
-                If str, then call register_forward_pre_hook for the module named using regex matching.
-                If List[str], then register_forward_pre_hook is called for each named module using exact matching.
-                If HookType, then register_forward_pre_hook is called for the module of the specified type. It should be implemented by derived classes.
+            module_name (str, List[str], or HookType):
+                If str, then call register_forward_pre_hook for the module named `module_name` using regex matching.
+                If List[str], then register_forward_pre_hook is called for each named `module_name` using exact matching.
             hook (Callable):
                 The user defined hook to be registered. The hook should have the following signature::
 
@@ -240,7 +226,7 @@ class ModelBase(nn.Module):
     @overload
     def register_full_backward_hook(
         self,
-        module_name_or_type: Union[str, List[str], HookType],
+        module_name: Union[str, List[str]],
         hook: Callable,
         *,
         prepend: bool = False,
@@ -250,10 +236,9 @@ class ModelBase(nn.Module):
         for details. The hook will be called every time the gradients with respect to a module are computed.
 
         Args:
-            module_name_or_type (str, List[str], or HookType):
-                If str, then call register_full_backward_hook for the module named using regex matching.
-                If List[str], then register_full_backward_hook is called for each named module using exact matching.
-                If HookType, then register_full_backward_hook is called for the module of the specified type. It should be implemented by derived classes.
+            module_name (str, List[str], or HookType):
+                If str, then call register_full_backward_hook for the module named `module_name` using regex matching.
+                If List[str], then register_full_backward_hook is called for each named `module_name` using exact matching.
             hook (Callable):
                 The user defined hook to be registered. The hook should have the following signature::
 
@@ -288,7 +273,7 @@ class ModelBase(nn.Module):
     @overload
     def register_full_backward_pre_hook(
         self,
-        module_name_or_type: Union[str, List[str], HookType],
+        module_name: Union[str, List[str]],
         hook: Callable,
         *,
         prepend: bool = False,
@@ -298,10 +283,9 @@ class ModelBase(nn.Module):
         for details. The hook will be called every time before the gradients with respect to a module are computed.
 
         Args:
-            module_name_or_type (str, List[str], or HookType):
-                If str, then call register_full_backward_pre_hook for the module named using regex matching.
-                If List[str], then register_full_backward_pre_hook is called for each named module using exact matching.
-                If HookType, then register_full_backward_pre_hook is called for the module of the specified type. It should be implemented by derived classes.
+            module_name (str, List[str], or HookType):
+                If str, then call register_full_backward_pre_hook for the module named `module_name` using regex matching.
+                If List[str], then register_full_backward_pre_hook is called for each named `module_name` using exact matching.
             hook (Callable):
                 The user defined hook to be registered. The hook should have the following signature::
 
@@ -333,6 +317,7 @@ class ModelBase(nn.Module):
             )
 
     @property
+    @abstractmethod
     def default_prompt_template(self) -> str:
         if hasattr(self.processor, "get_chat_template"):
             return self.processor.get_chat_template()
@@ -350,6 +335,7 @@ class ModelBase(nn.Module):
     def device(self):
         return self.model.device
 
+    @abstractmethod
     def process_input(self, *args, **kwargs):
         """
         This function will convert the input (which should be `List[Dict[str, str]]` or `List[str]` for unbatched and
@@ -358,7 +344,7 @@ class ModelBase(nn.Module):
         It can be regarded as a composition of `apply_prompt_template` and `processor.__call__`.
         If input is string, `apply_prompt_template` will not be used.
         """
-        raise NotImplementedError
+        raise NotImplementedError()
 
     @torch.no_grad()
     def generate(
@@ -477,7 +463,7 @@ class ModelBase(nn.Module):
                 If no matching modules are found, or if the new module's forward method
                 has incompatible parameter names with the original module.
         """
-        pass
+        ...
 
     @overload
     def replace_module(
@@ -706,7 +692,7 @@ class ModelBase(nn.Module):
                 module,
                 method_name,
                 MethodType(
-                    self._try_inject_params(
+                    try_inject_params(
                         new_method, module_name=name, old_method=old_method
                     ),
                     module,

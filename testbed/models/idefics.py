@@ -11,7 +11,7 @@ from transformers import (
     AutoProcessor,
 )
 
-from testbed.models.model_base import HookType, ModelBase
+from testbed.models.model_base import ModelBase
 
 
 class Idefics(ModelBase):
@@ -39,20 +39,6 @@ class Idefics(ModelBase):
                 "The model type cannot be detected automatically in `model_root`, which may lead to unexpected behaviors."
             )
             self._model_name = None
-
-    def _register_hook(self, register_fn_name, module_name_or_type, hook, **kwargs):
-        if module_name_or_type == HookType.TEXT_MODEL_LAYER:
-            module_name_or_type = r"model\.layers\.\d+$"
-        elif module_name_or_type == HookType.VISION_MODEL_LAYER:
-            module_name_or_type = r"model\.vision_model\.encoder\.layers\.\d+$"
-        elif isinstance(module_name_or_type, HookType):
-            raise ValueError(
-                f"{__class__.__name__} doesn't support hook type of {module_name_or_type.name}"
-            )
-
-        return super()._register_hook(
-            register_fn_name, module_name_or_type, hook, **kwargs
-        )
 
     @property
     def default_prompt_template(self):
